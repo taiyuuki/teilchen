@@ -4,4 +4,4 @@ dist/
 .DS_Store
 *.tsbuildinfo
 refs/
-apps/playground/public/we/*.tex
+apps/playground/public/we/**/*.tex
