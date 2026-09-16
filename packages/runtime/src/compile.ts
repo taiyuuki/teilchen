@@ -316,6 +316,9 @@ function num(v: unknown, fallback = 0): number {
 function vec(v: unknown, fallback: Vec3): Vec3 {
     if (Array.isArray(v) && v.length >= 3) return [num(v[0], fallback[0]), num(v[1], fallback[1]), num(v[2], fallback[2])]
 
+    // 标量（sphererandom 的半径、WE 单值字段）按各维同值展开
+    if (typeof v === 'number' && Number.isFinite(v)) return [v, v, v]
+
     return [...fallback]
 }
 

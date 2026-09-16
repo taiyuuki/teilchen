@@ -130,6 +130,12 @@ fn gauss3(seq: u32, i: u32) -> vec3f {
   return vec3f(sinT * cos(phi), sinT * sin(phi), cosT);
 }
 
+/** WE ApplySign 的单分量版：s>0 取 |c|，s<0 取 -|c|，s=0 清零。 */
+fn applySign1(c: f32, s: f32) -> f32 {
+  if (abs(s) < 1e-6) { return 0.0; }
+  return select(-abs(c), abs(c), s > 0.0);
+}
+
 // ---------- 3D value noise + curl（turbulence 用） ----------
 fn hash13(p: vec3f) -> f32 {
   var q = fract(p * 0.3183099 + vec3f(0.1, 0.2, 0.3));
@@ -275,22 +281,34 @@ fn emitOne(slot: u32, em: EmitterGpu, originBase: vec3f, instanceId: u32) {
   var pos = origin;
   var vel = vec3f(0.0);
   let speed = mix(em.rateDur.z, em.rateDur.w, rnd(seq, 13u));
+  var off = vec3f(0.0);
   if (em.kindActive.x == 0u) {
-    // boxrandom：盒内均匀取点，初速沿径向
+    // boxrandom：盒内均匀取点 × directions 掩码
     let r = vec3f(rnd(seq, 10u), rnd(seq, 11u), rnd(seq, 12u));
-    let off = mix(em.distMin.rgb, em.distMax.rgb, r);
-    pos = origin + off;
-    let dir = normalize(off * em.dirSign.rgb + vec3f(1e-6));
-    vel = dir * speed;
+    off = mix(em.distMin.rgb, em.distMax.rgb, r) * em.dirSign.rgb;
   } else {
-    // sphererandom：随机方向 + 半径
-    let d1 = normalize(gauss3(seq, 20u) * em.dirSign.rgb + vec3f(1e-6));
-    let radius = mix(em.distMin.x, em.distMax.x, rnd(seq, 21u));
-    pos = origin + d1 * radius;
-    let d2 = normalize(gauss3(seq, 22u) * em.dirSign.rgb + vec3f(1e-6));
-    vel = d2 * speed;
+    // sphererandom：随机方向 + 维度幂采样半径（2D 面积均匀 / 3D 体积均匀，对齐 WE）
+    var dims = 0.0;
+    if (abs(em.dirSign.x) > 1e-6) { dims += 1.0; }
+    if (abs(em.dirSign.y) > 1e-6) { dims += 1.0; }
+    if (abs(em.dirSign.z) > 1e-6) { dims += 1.0; }
+    let mn = max(em.distMin.x, 0.0);
+    let mx = max(mn, em.distMax.x);
+    let rr = rnd(seq, 21u);
+    var radius = mix(mn, mx, rr);
+    if (dims > 1.0) {
+      radius = pow(mix(pow(mn, dims), pow(mx, dims), rr), 1.0 / dims);
+    }
+    let dir = normalize(gauss3(seq, 20u) * em.dirSign.rgb + vec3f(1e-6));
+    off = dir * radius * abs(em.dirSign.rgb);
+    // WE ApplySign：sign 强制位置分量符号（0 分量清零；box 不应用）
+    off = vec3f(applySign1(off.x, em.sign.x), applySign1(off.y, em.sign.y), applySign1(off.z, em.sign.z));
   }
-  vel *= em.sign.rgb;
+  pos = origin + off;
+  // WE 语义：初速沿径向（位置归一化）；位置≈0 时无初速
+  if (speed != 0.0 && dot(off, off) > 1e-12) {
+    vel = normalize(off) * speed;
+  }
   p.position = pos;
   p.velocity = vel;
 
