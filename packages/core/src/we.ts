@@ -7,7 +7,7 @@
 import type { BlendMode, ChildDef, ParticleModule, ParticleSystemDef, SpawnType } from './types.ts'
 import { defaultControlPoints, defaultMaterial, defaultSystem } from './types.ts'
 import { formatWeVec3, parseWeBool, parseWeFloat, parseWeInt, parseWeVec3 } from './value.ts'
-import { normalizeModule } from './registry.ts'
+import { type ModuleKind, normalizeModule } from './registry.ts'
 
 export interface WeParseResult {
     def:      ParticleSystemDef;
@@ -168,4 +168,25 @@ function serializeModule(mod: ParticleModule): Record<string, unknown> {
     out.name = mod.name
 
     return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)))
+}
+
+const MODULE_KIND_TO_KEY = {
+    emitter:      'emitters',
+    initializer:  'initializers',
+    operator:     'operators',
+    renderer:     'renderers',
+} as const
+
+/** 把手工构造/预设的 def 也过一遍注册表规范化（填默认值、统一 vec3 形态），编辑器面板用。 */
+export function normalizeDef(def: ParticleSystemDef): ParticleSystemDef {
+    const out = { ...def }
+    for (const [kind, key] of Object.entries(MODULE_KIND_TO_KEY) as [ModuleKind, 'emitters' | 'initializers' | 'operators' | 'renderers'][]) {
+        out[key] = def[key].map(m => {
+            const { params } = normalizeModule(kind, m as Record<string, unknown> & { name: string })
+
+            return { ...m, ...params }
+        })
+    }
+
+    return out
 }

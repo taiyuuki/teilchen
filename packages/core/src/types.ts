@@ -54,7 +54,9 @@ export interface ChildDef {
 export type RendererKind = 'rope' | 'ropetrail' | 'sprite' | 'spritetrail'
 
 export interface RendererDef extends ParticleModule {
-    name:         RendererKind;
+
+    /** 允许未知渲染器名（保留 round-trip；runtime 对未实现项告警跳过）。 */
+    name:         string;
     length?:      number;
     maxLength?:   number;
     segments?:    number;

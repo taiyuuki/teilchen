@@ -44,31 +44,47 @@ export interface RuntimeStats {
     systems: Record<string, SystemStats>;
 }
 
+export interface UpdateSystemOptions {
+
+    /** 同时清空粒子并重跑 warmup。 */
+    reset?: boolean
+
+    /** 替换 sprite 贴图/采样器。 */
+    texture?: GPUTexture
+    sampler?: GPUSampler
+}
+
 export interface SystemHandle {
-    readonly id:       number;
-    readonly def:      ParticleSystemDef;
-    readonly warnings: string[];
-    readonly capacity: number;
-    destroy(): void;
+    readonly id:       number
+    readonly def:      ParticleSystemDef
+    readonly warnings: string[]
+    readonly capacity: number
+
+    /** 热更新定义：重编译 program 表立即生效；maxCount 变化时自动重建缓冲。返回编译警告。 */
+    update(def: ParticleSystemDef, opts?: UpdateSystemOptions): string[]
+    destroy(): void
 }
 
 interface SystemRes {
-    handle:         SystemHandle;
-    program:        GPUBuffer;
-    particles:      GPUBuffer;
-    sys:            GPUBuffer;
-    freeList:       GPUBuffer;
-    renderIndices:  GPUBuffer;
-    sysUniform:     GPUBuffer;
-    indirect:       GPUBuffer;
-    statsStaging:   GPUBuffer | null;
-    statsPending:   boolean;
-    stats:          SystemStats;
-    bgCompute:      GPUBindGroup;
-    bgRender:       GPUBindGroup;
-    pipelineRender: GPURenderPipeline;
-    textureView:    GPUTextureView;
-    sampler:        GPUSampler;
+    handle:         SystemHandle
+    def:            ParticleSystemDef
+    warnings:       string[]
+    capacity:       number
+    program:        GPUBuffer
+    particles:      GPUBuffer
+    sys:            GPUBuffer
+    freeList:       GPUBuffer
+    renderIndices:  GPUBuffer
+    sysUniform:     GPUBuffer
+    indirect:       GPUBuffer
+    statsStaging:   GPUBuffer | null
+    statsPending:   boolean
+    stats:          SystemStats
+    bgCompute:      GPUBindGroup
+    bgRender:       GPUBindGroup
+    pipelineRender: GPURenderPipeline
+    textureView:    GPUTextureView
+    sampler:        GPUSampler
 }
 
 export class ParticleRuntime {
@@ -98,7 +114,7 @@ export class ParticleRuntime {
     private raf = 0
     private running = false
     private playing = true
-    private time = 0
+    private simTime = 0
     private lastNow = 0
     private pointerWorld: [number, number] = [0, 0]
 
@@ -220,10 +236,6 @@ export class ParticleRuntime {
         for (const w of compiled.warnings) this.onWarning(`[${def.name}] ${w}`)
 
         const program = device.createBuffer({ size: PROGRAM_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
-        const progData = new Uint8Array(compiled.data)
-        new Uint32Array(progData.buffer, PROGRAM_BUFFER_SIZE - 16, 4)[3] = capacity // counts.w
-        device.queue.writeBuffer(program, 0, progData)
-
         const particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
         const sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
         const freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
@@ -231,46 +243,11 @@ export class ParticleRuntime {
         const sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         const indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
 
-        this.initAliveState({ sys, freeList, particles, capacity })
-
-        const bgCompute = device.createBindGroup({
-            layout:  this.bglCompute,
-            entries: [
-                { binding: 0, resource: { buffer: this.frameUniform } },
-                { binding: 1, resource: { buffer: sysUniform } },
-                { binding: 2, resource: { buffer: sys } },
-                { binding: 3, resource: { buffer: particles } },
-                { binding: 4, resource: { buffer: program } },
-                { binding: 5, resource: { buffer: freeList } },
-                { binding: 6, resource: { buffer: renderIndices } },
-                { binding: 7, resource: { buffer: indirect } },
-            ],
-        })
-
-        const textureView = opts.texture ? opts.texture.createView() : this.defaultTextureView
-        const bglRender = this.renderPipelines.get('additive')!.getBindGroupLayout(0)
-        const bgRender = device.createBindGroup({
-            layout:  bglRender,
-            entries: [
-                { binding: 0, resource: { buffer: this.frameUniform } },
-                { binding: 1, resource: { buffer: sysUniform } },
-                { binding: 2, resource: { buffer: particles } },
-                { binding: 3, resource: { buffer: renderIndices } },
-                { binding: 4, resource: textureView },
-                { binding: 5, resource: opts.sampler ?? this.defaultSampler },
-            ],
-        })
-
-        const pipelineRender = this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!
-
         const res: SystemRes = {
-            handle: {
-                id:       this.nextId++,
-                def,
-                warnings: compiled.warnings,
-                capacity,
-                destroy:  () => this.removeSystem(res.handle.id),
-            },
+            handle:         null!,
+            def,
+            warnings:       compiled.warnings,
+            capacity,
             program,
             particles,
             sys,
@@ -278,15 +255,26 @@ export class ParticleRuntime {
             renderIndices,
             sysUniform,
             indirect,
-            statsStaging: device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            statsPending: false,
-            stats:        { alive: 0, rendered: 0 },
-            bgCompute,
-            bgRender,
-            pipelineRender,
-            textureView,
-            sampler:      opts.sampler ?? this.defaultSampler,
+            statsStaging:   device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+            statsPending:   false,
+            stats:          { alive: 0, rendered: 0 },
+            bgCompute:      null!,
+            bgRender:       null!,
+            pipelineRender: this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!,
+            textureView:    opts.texture ? opts.texture.createView() : this.defaultTextureView,
+            sampler:        opts.sampler ?? this.defaultSampler,
         }
+        res.handle = {
+            id:                        this.nextId++,
+            get def() { return res.def },
+            get warnings() { return res.warnings },
+            get capacity() { return res.capacity },
+            update:  (d, o) => this.updateSystem(res, d, o),
+            destroy: () => this.removeSystem(res.handle.id),
+        }
+        this.writeProgramBuffer(res, compiled, capacity)
+        this.makeBindGroups(res)
+        this.initAliveState(res)
         this.systems.push(res)
 
         // warmup（starttime：以 1/60s 预跑，GPU 空转不渲染）
@@ -295,11 +283,94 @@ export class ParticleRuntime {
         return res.handle
     }
 
+    private updateSystem(
+        res: SystemRes,
+        def: ParticleSystemDef,
+        opts: UpdateSystemOptions = {},
+    ): string[] {
+        const capacity = Math.min(MAX_CAPACITY, Math.max(1, Math.round(def.maxCount)))
+        const compiled = compileProgram(def)
+        for (const w of compiled.warnings) this.onWarning(`[${def.name}] ${w}`)
+
+        if (capacity === res.capacity) {
+            this.writeProgramBuffer(res, compiled, capacity)
+            if (opts.texture || opts.sampler) {
+                if (opts.texture) res.textureView = opts.texture.createView()
+                if (opts.sampler) res.sampler = opts.sampler
+                this.makeBindGroups(res)
+            }
+        }
+        else {
+
+            // 容量变化：重建缓冲与 bindgroup（粒子状态不可保留）
+            for (const b of [res.program, res.particles, res.sys, res.freeList, res.renderIndices, res.sysUniform, res.indirect]) b.destroy()
+            const device = this.device
+            res.program = device.createBuffer({ size: PROGRAM_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            res.particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            res.sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
+            res.freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            res.renderIndices = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
+            res.sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+            res.indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
+            res.capacity = capacity
+            if (opts.texture) res.textureView = opts.texture.createView()
+            if (opts.sampler) res.sampler = opts.sampler
+            this.makeBindGroups(res)
+            this.writeProgramBuffer(res, compiled, capacity)
+            this.initAliveState(res)
+        }
+
+        res.def = def
+        res.warnings = compiled.warnings
+        res.pipelineRender = this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!
+
+        if (opts.reset) {
+            this.initAliveState(res)
+            if (def.startTime > 0) this.warmup(res)
+        }
+
+        return compiled.warnings
+    }
+
+    private writeProgramBuffer(res: SystemRes, compiled: { data: Uint8Array }, capacity: number): void {
+        const progData = new Uint8Array(compiled.data)
+        new Uint32Array(progData.buffer, PROGRAM_BUFFER_SIZE - 16, 4)[3] = capacity // counts.w
+        this.device.queue.writeBuffer(res.program, 0, progData)
+    }
+
+    private makeBindGroups(res: SystemRes): void {
+        res.bgCompute = this.device.createBindGroup({
+            layout:  this.bglCompute,
+            entries: [
+                { binding: 0, resource: { buffer: this.frameUniform } },
+                { binding: 1, resource: { buffer: res.sysUniform } },
+                { binding: 2, resource: { buffer: res.sys } },
+                { binding: 3, resource: { buffer: res.particles } },
+                { binding: 4, resource: { buffer: res.program } },
+                { binding: 5, resource: { buffer: res.freeList } },
+                { binding: 6, resource: { buffer: res.renderIndices } },
+                { binding: 7, resource: { buffer: res.indirect } },
+            ],
+        })
+        const bglRender = this.renderPipelines.get('additive')!.getBindGroupLayout(0)
+        res.bgRender = this.device.createBindGroup({
+            layout:  bglRender,
+            entries: [
+                { binding: 0, resource: { buffer: this.frameUniform } },
+                { binding: 1, resource: { buffer: res.sysUniform } },
+                { binding: 2, resource: { buffer: res.particles } },
+                { binding: 3, resource: { buffer: res.renderIndices } },
+                { binding: 4, resource: res.textureView },
+                { binding: 5, resource: res.sampler },
+            ],
+        })
+    }
+
     private initAliveState(
-        b: SystemRes | { sys: GPUBuffer; freeList: GPUBuffer; particles: GPUBuffer; capacity: number },
+        b: Pick<SystemRes, 'capacity' | 'freeList' | 'particles' | 'sys'>,
         zeroParticles = true,
     ): void {
-        const capacity = 'capacity' in b ? b.capacity : b.handle.capacity
+        const capacity = b.capacity
         const free = new Uint32Array(capacity)
         for (let i = 0; i < capacity; i++) free[i] = i
         this.device.queue.writeBuffer(b.freeList, 0, free)
@@ -328,7 +399,7 @@ export class ParticleRuntime {
 
     /** 重置所有系统（清空粒子、重建 free-list、时间归零、重跑 warmup）。 */
     reset(): void {
-        this.time = 0
+        this.simTime = 0
         for (const s of this.systems) {
             this.initAliveState(s, true)
             if (s.handle.def.startTime > 0) this.warmup(s)
@@ -352,9 +423,21 @@ export class ParticleRuntime {
         if (this.running) return
         this.running = true
         this.lastNow = performance.now()
+        let errored = false
         const loop = (now: number) => {
             if (!this.running) return
-            this.tick(now)
+            try {
+                this.tick(now)
+                errored = false
+            }
+            catch(err) {
+
+                // 帧内异常不能杀死循环（编辑器场景需要持续出帧），只上报一次
+                if (!errored) {
+                    errored = true
+                    this.onWarning(`帧循环异常: ${err instanceof Error ? err.message : String(err)}`)
+                }
+            }
             this.raf = requestAnimationFrame(loop)
         }
         this.raf = requestAnimationFrame(loop)
@@ -371,7 +454,7 @@ export class ParticleRuntime {
 
     /** 暂停时单步一帧（固定 1/60s）。 */
     step(): void {
-        this.time += 1 / 60
+        this.simTime += 1 / 60
         this.renderFrame(1 / 60, true)
     }
 
@@ -386,6 +469,10 @@ export class ParticleRuntime {
         return { fps: this.fps, systems: Object.fromEntries(this.systems.map(s => [s.handle.def.name, s.stats])) }
     }
 
+    get time(): number {
+        return this.simTime
+    }
+
     private tick(now: number): void {
         const dt = Math.min(1 / 30, Math.max(0, (now - this.lastNow) / 1000))
         this.lastNow = now
@@ -397,7 +484,7 @@ export class ParticleRuntime {
             this.fpsLast = now
         }
 
-        if (this.playing) this.time += dt
+        if (this.playing) this.simTime += dt
         this.renderFrame(dt, this.playing)
         this.sampleStats(now)
     }

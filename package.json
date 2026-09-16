@@ -5,7 +5,9 @@
   "description": "WebGPU GPU VFX runtime & editor.",
   "scripts": {
     "dev": "pnpm --filter playground dev",
-    "typecheck": "tsc -b tsconfig.json"
+    "dev:editor": "pnpm --filter editor dev",
+    "lint": "eslint .",
+    "typecheck": "tsc -b tsconfig.json && pnpm --filter editor typecheck"
   },
   "devDependencies": {
     "@taiyuuki/eslint-config": "catalog:",

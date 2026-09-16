@@ -8,15 +8,29 @@ packages/
   runtime/   WebGPU 运行时：GPU 模拟 + indirect billboard 渲染
 apps/
   playground/  浏览器预览台（pnpm dev）
+  editor/      Vue 3 可视化编辑器（pnpm dev:editor）
 ```
 
 ## 运行
 
 ```bash
 pnpm install
-pnpm dev        # http://localhost:5180（需要 WebGPU：Chrome 113+ / Safari 26+）
+pnpm dev            # playground  http://localhost:5180（需要 WebGPU：Chrome 113+ / Safari 26+）
+pnpm dev:editor     # editor      http://localhost:5181
+pnpm lint
 pnpm typecheck
 ```
+
+## Editor
+
+`apps/editor`（Vue 3）：改参数 → 防抖 120ms → `handle.update()` 重编译 GPU program 表热生效（不 reset，粒子状态保留；maxCount 变化自动重建缓冲）。
+
+- 左栏模块树（emitter/initializer/operator/renderer 增删，未实现模块带标记）
+- 右栏属性面板由 core 注册表自动生成（float/int/bool/vec3/color255/enum）
+- 系统面板：maxCount / startTime / blending / origin / 8 个 controlpoint（lock = 跟随鼠标）
+- 中央预览 + 2D gizmo overlay（emitter 范围线框、controlpoint 十字、指针圈）
+- 时间轴：播放/暂停/单步/重置、fps/alive/drawn/时间
+- 预设（与 playground 共享 `core/presets.ts`）、WE JSON 导入/导出、贴图切换（halo/white/上传图片）
 
 ## GPU 模拟架构
 
@@ -49,7 +63,8 @@ pnpm typecheck
 
 ## Roadmap
 
-- [ ] Phase 3：Editor（Vue 3）—— 由 core 注册表自动生成属性面板、controlpoint gizmo、时间轴
+- [x] Phase 3：Editor MVP（Vue 3）—— 注册表驱动的属性面板、controlpoint gizmo、时间轴、热编辑 ✓
+- [ ] Editor 打磨：模块拖拽排序、撤销/重做、参数曲线、多系统场景面板
 - [ ] rope/ropetrail/spritetrail 渲染器（GPU 排序或索引回读）
 - [ ] children 子粒子系统（eventfollow/eventspawn/eventdeath）
 - [ ] `.tex`（LZ4+BC）解码、sprite sheet 动画、31 种 colorBlendMode shader 化
