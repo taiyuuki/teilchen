@@ -29,7 +29,7 @@ struct Particle {
 };
 struct SpriteUniform {
   params: vec4u,                    // x: frameCount  y: mode(0 无 / 1 sequence / 2 randomframe)
-  anim: vec4f,                      // x: 平均帧时长  y: sequenceMultiplier
+  anim: vec4f,                      // x: 平均帧时长  y: sequenceMultiplier  z: 贴图高/宽比（spritetrail 用）
   frames: array<vec4f, 256>,        // [2i] = (x, y, xAxis.x, xAxis.y)  [2i+1] = (yAxis.x, yAxis.y, frametime, 0)
   renderer: vec4f,                  // x: 渲染模式  y: length  z: maxlength  w: segments
   blend: vec4f,                     // x: colorBlendMode（0 无 / 1-31 WE 编号）
@@ -216,14 +216,15 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
       let rc = vec2f(c.x * cs - c.y * sn, c.x * sn + c.y * cs);
       world = p.position.xy + rc * max(p.size, 0.0) * 0.5;
     } else {
-      // spritetrail：沿速度拉伸（WE：像素长 = clamp(speed × length, 0, maxlength)），头锚定粒子
+      // spritetrail：WE ComputeParticleTrailTangents —— L = min(speed×length, maxlength) 为
+      // 粒子尺寸的倍数；quad 以粒子为中心沿速度对称拉伸，半长 = size/2 × 贴图高宽比 × L
       let sp = length(p.velocity.xy);
-      let L = clamp(sp * sprite.renderer.y, max(p.size, 1.0), max(sprite.renderer.z, max(p.size, 1.0)));
       let d = select(vec2f(1.0, 0.0), normalize(p.velocity.xy), sp > 1e-4);
       let n = vec2f(-d.y, d.x);
-      let half = max(p.size, 1.0) * 0.5;
-      // c.x∈[-1,1] → 段向 [-L/2, L/2]，整体后移 (L-size)/2 使头在粒子处
-      world = p.position.xy + d * (c.x * L * 0.5 - (L * 0.5 - half)) + n * c.y * half;
+      let L = min(sp * sprite.renderer.y, sprite.renderer.z);
+      let half = max(p.size, 0.0) * 0.5;
+      let axisHalf = half * sprite.anim.z * L;
+      world = p.position.xy + n * (c.x * half) - d * (c.y * axisHalf);
     }
   }
   else if (mode == 2u) {

@@ -243,6 +243,12 @@ fn mixExp(lo: f32, hi: f32, exp: f32, r: f32) -> f32 {
   return mix(lo, hi, pow(clamp(r, 0.0, 1.0), exp));
 }
 
+fn hsv2rgb(c: vec3f) -> vec3f {
+  // 标准 HSV→RGB（iq 公式）：通道偏移 (0, 2/3, 1/3) 对应 (R, G, B)
+  let p3 = abs(fract(vec3f(c.x) + vec3f(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - vec3f(1.0);
+  return c.z * mix(vec3f(1.0), clamp(p3, vec3f(0.0), vec3f(1.0)), c.y);
+}
+
 fn applyInitializer(p: ptr<function, Particle>, ini: IniGpu, seq: u32, k: u32) {
   let r = rnd(seq, 1000u + k);
   switch ini.kind {
@@ -256,6 +262,41 @@ fn applyInitializer(p: ptr<function, Particle>, ini: IniGpu, seq: u32, k: u32) {
     case 4u { (*p).velocity = mix(ini.a.rgb, ini.b.rgb, vec3f(pow(clamp(r, 0.0, 1.0), ini.a.w))); }
     case 5u { (*p).rotation = mix(ini.a.rgb, ini.b.rgb, vec3f(pow(clamp(r, 0.0, 1.0), ini.a.w))); }
     case 6u { (*p).angularVelocity = mix(ini.a.rgb, ini.b.rgb, vec3f(pow(clamp(r, 0.0, 1.0), ini.a.w))); }
+    case 7u {                                                                 // turbulentvelocityrandom（近似 WE）
+      let sp = mixExp(ini.a.y, ini.a.z, 1.0, r) + ini.b.y;
+      let dir = curlNoise((*p).position * ini.a.x, ini.b.x + r * 6.28);
+      (*p).velocity += dir * sp;
+    }
+    case 8u {                                                                 // hsvcolorrandom（hue/sat/val 各自随机）
+      let h = mixExp(ini.a.x, ini.a.y, 1.0, r);
+      let s = mixExp(ini.a.z, ini.b.x, 1.0, rnd(seq, 2000u + k));
+      let v = mixExp(ini.b.y, ini.b.z, 1.0, rnd(seq, 3000u + k));
+      (*p).color = hsv2rgb(vec3f(h, s, v));
+    }
+    case 9u {                                                                 // mapsequencebetweencontrolpoints
+      let cs = clamp(i32(ini.a.x), 0, 7);
+      let ce = clamp(i32(ini.a.y), 0, 7);
+      let t = fract(f32(seq) / max(ini.a.z, 0.0001));
+      let a3 = sysUniform.controlPoints[u32(cs)].xyz;
+      let b3 = sysUniform.controlPoints[u32(ce)].xyz;
+      (*p).position += (b3 - a3) * t;
+    }
+    case 10u {                                                                // mapsequencearoundcontrolpoint（axis 主分量）
+      let cp0 = sysUniform.controlPoints[u32(clamp(i32(ini.a.x), 0, 7))].xyz;
+      var rel = (*p).position - cp0;
+      let ang = f32(seq) / max(ini.a.y, 0.0001) * TAU;
+      if (ini.a.z < 0.5) {
+        let r = length(rel.yz);
+        rel = vec3f(rel.x, cos(ang) * r, sin(ang) * r);        // 绕 x
+      } else if (ini.a.z < 1.5) {
+        let r = length(rel.xz);
+        rel = vec3f(cos(ang) * r, rel.y, sin(ang) * r);        // 绕 y
+      } else {
+        let r = length(rel.xy);
+        rel = vec3f(cos(ang) * r, sin(ang) * r, rel.z);        // 绕 z
+      }
+      (*p).position = cp0 + rel;
+    }
     default {}
   }
 }
@@ -378,37 +419,44 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
     case 1u {  // angularmovement
       (*p).angularVelocity += (op.a.rgb - op.a.w * (*p).angularVelocity) * frame.dt;
     }
-    case 2u {  // alphafade：首尾淡入淡出
+    case 2u {  // alphafade：首尾淡入淡出（fadeintime/fadeouttime = 寿命归一化进度）
+      let prog = clamp(age / max((*p).initLifetime, 1e-5), 0.0, 1.0);
       var f = 1.0;
-      if (op.a.x > 0.0) { f = min(f, age / op.a.x); }
-      if (op.a.y > 0.0) { f = min(f, (*p).lifetime / op.a.y); }
+      if (op.a.x > 0.0 && prog <= op.a.x) {
+        f = prog / op.a.x;
+      } else if (op.a.y < 1.0 && prog > op.a.y) {
+        f = 1.0 - (prog - op.a.y) / max(1.0 - op.a.y, 1e-5);
+      }
       (*p).alpha *= clamp(f, 0.0, 1.0);
     }
-    case 3u {  // alphachange
-      let t = clamp((age - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
-      (*p).alpha = mix(op.a.z, op.a.w, t);
+    case 3u {  // alphachange：×[sv→ev]，插值自变量为寿命进度（WE ValueChange）
+      let prog = clamp(age / max((*p).initLifetime, 1e-5), 0.0, 1.0);
+      let t = clamp((prog - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
+      (*p).alpha *= mix(op.a.z, op.a.w, t);
     }
-    case 4u {  // sizechange
-      let t = clamp((age - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
-      (*p).size = max(0.0, mix(op.a.z, op.a.w, t));
+    case 4u {  // sizechange：×[sv→ev]，插值自变量为寿命进度
+      let prog = clamp(age / max((*p).initLifetime, 1e-5), 0.0, 1.0);
+      let t = clamp((prog - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
+      (*p).size = max(0.0, (*p).size * mix(op.a.z, op.a.w, t));
     }
-    case 5u {  // colorchange
-      let t = clamp((age - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
-      (*p).color = mix(op.b.rgb, op.c.rgb, vec3f(t));
+    case 5u {  // colorchange：×逐通道 [sv→ev]，插值自变量为寿命进度
+      let prog = clamp(age / max((*p).initLifetime, 1e-5), 0.0, 1.0);
+      let t = clamp((prog - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
+      (*p).color *= mix(op.b.rgb, op.c.rgb, vec3f(t));
     }
-    case 6u {  // oscillatealpha：per-particle 随机 freq/scale/phase（hash spawnSequence）
+    case 6u {  // oscillatealpha：alpha × mix(smin, smax, (cos(w·age+φ)+1)/2)，freq/φ per-particle
       let r = hashOp(seq, k);
       let freq = mix(op.a.x, op.a.y, r.x);
-      let scale = mix(op.a.z, op.a.w, r.y);
-      let phase = mix(op.b.x, op.b.y, r.z);
-      (*p).alpha = clamp((*p).alpha + (*p).initAlpha * scale * cos(TAU * freq * age + phase), 0.0, 1.0);
+      let phase = mix(op.b.x, op.b.y + TAU, r.z);
+      let osc = (cos(freq * age + phase) + 1.0) * 0.5;
+      (*p).alpha *= mix(op.a.z, op.a.w, osc);
     }
-    case 7u {  // oscillatesize
+    case 7u {  // oscillatesize：size × mix(smin, smax, (cos(w·age+φ)+1)/2)
       let r = hashOp(seq, k);
       let freq = mix(op.a.x, op.a.y, r.x);
-      let scale = mix(op.a.z, op.a.w, r.y);
-      let phase = mix(op.b.x, op.b.y, r.z);
-      (*p).size = max(0.0, (*p).size + (*p).initSize * scale * cos(TAU * freq * age + phase));
+      let phase = mix(op.b.x, op.b.y + TAU, r.z);
+      let osc = (cos(freq * age + phase) + 1.0) * 0.5;
+      (*p).size = max(0.0, (*p).size * mix(op.a.z, op.a.w, osc));
     }
     case 9u {  // turbulence：curl noise 流场
       let r = hashOp(seq, k);
@@ -418,7 +466,7 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
       let curl = curlNoise(sp, phase);
       (*p).velocity += curl * op.c.rgb * speed * frame.dt;
     }
-    case 10u {  // vortex：绕控制点轴的切向速度
+    case 10u {  // vortex：切向速度场（把切向分量拉向目标速度，避免加速度语义的持续累积甩散）
       let cpi = i32(op.b.w);
       var center = sysUniform.origin.xyz;
       if (cpi >= 0 && cpi < 8) { center = cp[u32(cpi)].xyz; }
@@ -430,7 +478,8 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
         let tt = clamp((d - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
         let speed = mix(op.a.z, op.a.w, tt);
         let tangent = normalize(cross(axial, radial));
-        (*p).velocity += tangent * speed * frame.dt;
+        let vT = dot((*p).velocity, tangent);
+        (*p).velocity += tangent * (speed - vT) * min(frame.dt * 2.0, 1.0);
       }
     }
     case 11u {  // controlpointattract：scale<0 远离控制点（cursor avoid），>0 吸引
@@ -444,6 +493,40 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
         (*p).velocity += (dir / d) * op.a.x * frame.dt;
       }
     }
+    case 12u {  // maintaindistancetocontrolpoint：径向弹簧把粒子约束在目标距离环上
+      let cpi = i32(op.b.w);
+      var center = vec3f(0.0);
+      if (cpi >= 0 && cpi < 8) { center += cp[u32(cpi)].xyz; }
+      let dir = (*p).simPos - center;
+      let d = length(dir);
+      if (d > 0.001) {
+        (*p).velocity += (dir / d) * (d - op.a.x) * op.a.y * frame.dt;
+      }
+    }
+    case 13u {  // boids：对齐/聚合/分离（小容量 O(N²)；容量护栏在 compile 侧）
+      var ali = vec3f(0.0);
+      var coh = vec3f(0.0);
+      var sep = vec3f(0.0);
+      var cnt = 0u;
+      let myPos = (*p).simPos;
+      let mySeq = (*p).spawnSequence;
+      for (var j = 0u; j < program.counts.w; j++) {
+        let q = particles[j];
+        if (q.state == 0u || q.spawnSequence == mySeq) { continue; }
+        let dq = q.simPos - myPos;
+        let d = length(dq);
+        if (d > 0.001 && d < op.a.x) {
+          ali += q.velocity;
+          coh += dq;
+          if (d < op.a.x * 0.5) { sep -= dq / d; }
+          cnt++;
+        }
+      }
+      if (cnt > 0u) {
+        let inv = 1.0 / f32(cnt);
+        (*p).velocity += (ali * inv * op.b.x + coh * inv * op.b.y + sep * op.b.z) * frame.dt;
+      }
+    }
     default {}
   }
 }
@@ -454,7 +537,8 @@ fn applyPositionOscillator(p: ptr<function, Particle>, op: OpGpu, k: u32) {
   let freq = mix(op.a.rgb, op.b.rgb, vec3f(r.x));
   let scale = mix(op.c.rgb, op.d.rgb, vec3f(r.y));
   let phase = mix(op.e.rgb, op.f.rgb, vec3f(r.z));
-  (*p).position += scale * cos(TAU * freq * (*p).age + phase);
+  // WE 参考实现：w = frequency（弧度/秒），与 alpha/size 振荡一致
+  (*p).position += scale * cos(freq * (*p).age + phase);
 }
 
 // ---------- 父侧 children 簿记（父 simulate 内调用） ----------

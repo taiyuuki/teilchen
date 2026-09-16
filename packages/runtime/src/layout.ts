@@ -79,28 +79,34 @@ export const SPRITE_UNIFORM_SIZE = 32 + MAX_SPRITE_FRAMES * 2 * 16 + 32
 export const EmitterKind = { BoxRandom: 0, SphereRandom: 1 } as const
 
 export const InitializerKind = {
-    LifetimeRandom:        0,
-    SizeRandom:            1,
-    AlphaRandom:           2,
-    ColorRandom:           3,
-    VelocityRandom:        4,
-    RotationRandom:        5,
-    AngularVelocityRandom: 6,
+    LifetimeRandom:            0,
+    SizeRandom:                1,
+    AlphaRandom:               2,
+    ColorRandom:               3,
+    VelocityRandom:            4,
+    RotationRandom:            5,
+    AngularVelocityRandom:     6,
+    TurbulentVelocityRandom:   7,
+    HsvColorRandom:            8,
+    MapSequenceBetweenCPs:     9,
+    MapSequenceAroundCP:       10,
 } as const
 
 export const OperatorKind = {
-    Movement:            0,
-    AngularMovement:     1,
-    AlphaFade:           2,
-    AlphaChange:         3,
-    SizeChange:          4,
-    ColorChange:         5,
-    OscillateAlpha:      6,
-    OscillateSize:       7,
-    OscillatePosition:   8,
-    Turbulence:          9,
-    Vortex:              10,
-    ControlPointAttract: 11,
+    Movement:             0,
+    AngularMovement:      1,
+    AlphaFade:            2,
+    AlphaChange:          3,
+    SizeChange:           4,
+    ColorChange:          5,
+    OscillateAlpha:       6,
+    OscillateSize:        7,
+    OscillatePosition:    8,
+    Turbulence:              9,
+    Vortex:                  10,
+    ControlPointAttract:     11,
+    MaintainDistanceToCP:    12,
+    Boids:                   13,
 } as const
 
 /** 子粒子系统类型（与 WGSL/ChildDesc 一致）。 */

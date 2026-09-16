@@ -4,7 +4,7 @@
  * 模拟完全在 compute shader 中进行（free-list 槽位分配 + 原子计数），
  * CPU 侧零回读；渲染走 indirect instanced billboard，实例数由 GPU 写出。
  */
-import type { ChildDef, ParticleSystemDef, SpawnType } from '@teilchen/core'
+import { type ChildDef, type ParticleSystemDef, type SpawnType, applyChildLayerTransform } from '@teilchen/core'
 import { burstLifetime, compileChildren, compileProgram, compileRenderer } from './compile.ts'
 import type { SpriteFrame } from './tex.ts'
 import {
@@ -45,6 +45,9 @@ export interface AddSystemOptions {
     /** 粒子 sprite 贴图；缺省用程序化 halo。可传 TextureAsset（含 .tex 的帧表/采样器）。 */
     texture?: GPUTexture | TextureAsset;
     sampler?: GPUSampler;
+
+    /** 子系统贴图（key = ChildDef.name，即 WE json 引用路径）；缺省子系统退回默认贴图。 */
+    childTextures?: Record<string, TextureAsset>;
 }
 
 export interface SystemStats {
@@ -65,6 +68,9 @@ export interface UpdateSystemOptions {
     /** 替换 sprite 贴图/采样器（TextureAsset 同时更新 sprite 帧表）。 */
     texture?: GPUTexture | TextureAsset
     sampler?: GPUSampler
+
+    /** 子系统贴图（children 结构重建时生效）。 */
+    childTextures?: Record<string, TextureAsset>
 }
 
 export interface SystemHandle {
@@ -118,6 +124,7 @@ interface SystemRes {
     pipelineRender: GPURenderPipeline
     textureView:    GPUTextureView
     sampler:        GPUSampler
+    texAspect:      number
 
     // ---- children（父持有合并实例/事件缓冲；子借用） ----
     role:         ChildRole | null
@@ -328,13 +335,10 @@ export class ParticleRuntime {
 
     addSystem(def: ParticleSystemDef, opts: AddSystemOptions = {}): SystemHandle {
         const res = this.createSystem(def, opts, null)
-        this.wireChildren(res, def)
+        this.wireChildren(res, def, opts)
 
-        // warmup（starttime：以 1/60s 预跑，GPU 空转不渲染；子系统的 warmup 暂不含）
-        if (def.startTime > 0) {
-            if (res.children.length) this.onWarning(`[${def.name}] startTime 预热暂不包含子系统`)
-            this.warmup(res)
-        }
+        // warmup（starttime：以 1/60s 预跑，GPU 空转不渲染；子系统同帧预热）
+        if (def.startTime > 0) this.warmup(res)
 
         return res.handle
     }
@@ -402,6 +406,7 @@ export class ParticleRuntime {
             pipelineRender: this.pickRenderPipeline(def),
             textureView:    tex.view,
             sampler:        opts.sampler ?? tex.sampler ?? this.defaultSampler,
+            texAspect:      tex.aspect,
             role,
             children:       [],
             childrenSig:    '',
@@ -431,7 +436,7 @@ export class ParticleRuntime {
     }
 
     /** 为父系统接线 children：分配实例区域、创建子系统（按声明顺序入列，保证 dispatch/渲染序）。 */
-    private wireChildren(res: SystemRes, def: ParticleSystemDef): void {
+    private wireChildren(res: SystemRes, def: ParticleSystemDef, opts?: AddSystemOptions): void {
         const device = this.device
         const eventChildren = def.children.filter(c => c.def && c.type !== 'static').slice(0, 4)
         let base = 0
@@ -445,11 +450,11 @@ export class ParticleRuntime {
         }
         res.childrenSig = childrenSignature(def, res.capacity)
 
-        // 父缓冲：合并实例 + 事件
+        // 父缓冲：合并实例 + 事件（ChildInstance = 4×vec4 = 64B）
         res.instances?.destroy()
         res.events?.destroy()
         res.instances = base > 0
-            ? device.createBuffer({ size: base * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            ? device.createBuffer({ size: base * 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
             : null
         res.events = device.createBuffer({ size: MAX_EVENTS * 32 + 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
 
@@ -476,8 +481,12 @@ export class ParticleRuntime {
         // 创建子系统（static 也记入 children 列表便于整体重建/移除）
         for (const child of def.children) {
             if (!child.def) continue
+            const childTex = opts?.childTextures?.[child.name]
             if (child.type === 'static') {
-                res.children.push(this.createSystem(child.def, {}, null))
+
+                // static 子的层变换（children 声明的 origin/scale/angles）烘进独立副本
+                const layered = applyChildLayerTransform(child.def, child.origin, child.scale, child.angles)
+                res.children.push(this.createSystem(layered, childTex ? { texture: childTex } : {}, null))
                 continue
             }
             const region = regions.find(r => r.child === child)
@@ -491,7 +500,7 @@ export class ParticleRuntime {
                 lifetime:        burstLifetime(child.def),
                 probability:     Math.min(1, Math.max(0, child.probability || 1)),
             }
-            const childRes = this.createSystem(child.def, {}, role)
+            const childRes = this.createSystem(child.def, childTex ? { texture: childTex } : {}, role)
 
             // 子系统 childMeta：A=(1,myType,cpStart,base) B=(lifetime,cap,prob,0)
             const meta = new Uint32Array(new ArrayBuffer(32))
@@ -537,7 +546,7 @@ export class ParticleRuntime {
             if (sig !== res.childrenSig) {
                 for (const c of [...res.children]) this.removeSystem(c.handle.id)
                 res.children = []
-                this.wireChildren(res, def)
+                this.wireChildren(res, def, opts)
             }
         }
 
@@ -551,6 +560,7 @@ export class ParticleRuntime {
                 if (tex) {
                     res.textureView = tex.view
                     res.spriteFrames = tex.frames
+                    res.texAspect = tex.aspect
                     if (!opts.sampler && tex.sampler) res.sampler = tex.sampler
                 }
                 if (opts.sampler) res.sampler = opts.sampler
@@ -581,6 +591,7 @@ export class ParticleRuntime {
             if (tex) {
                 res.textureView = tex.view
                 res.spriteFrames = tex.frames
+                res.texAspect = tex.aspect
                 if (!opts.sampler && tex.sampler) res.sampler = tex.sampler
             }
             if (opts.sampler) res.sampler = opts.sampler
@@ -602,13 +613,13 @@ export class ParticleRuntime {
         return compiled.warnings
     }
 
-    /** 归一化贴图参数：GPUTexture 或带帧表的 TextureAsset。 */
-    private resolveTexture(opts: { texture?: GPUTexture | TextureAsset }): { view: GPUTextureView, sampler?: GPUSampler, frames?: SpriteFrame[] } {
+    /** 归一化贴图参数：GPUTexture 或带帧表的 TextureAsset（aspect = 高/宽，WE textureRatio）。 */
+    private resolveTexture(opts: { texture?: GPUTexture | TextureAsset }): { view: GPUTextureView, sampler?: GPUSampler, frames?: SpriteFrame[], aspect: number } {
         const t = opts.texture
-        if (!t) return { view: this.defaultTextureView }
-        if ('createView' in t) return { view: t.createView() }
+        if (!t) return { view: this.defaultTextureView, aspect: 1 }
+        if ('createView' in t) return { view: t.createView(), aspect: t.height / t.width }
 
-        return { view: t.texture.createView(), sampler: t.sampler, frames: t.frames }
+        return { view: t.texture.createView(), sampler: t.sampler, frames: t.frames, aspect: t.texture.height / t.texture.width }
     }
 
     /** 把 def 的动画模式 + 帧表写进 sprite uniform（仅渲染侧使用）。 */
@@ -637,6 +648,9 @@ export class ParticleRuntime {
         else {
             u32[0] = 0
         }
+
+        // anim.z = 贴图高/宽比（WE textureRatio，spritetrail 拖尾长度乘子）
+        u[6] = Number.isFinite(res.texAspect) && res.texAspect > 0 ? res.texAspect : 1
 
         // 渲染器参数（mode/length/maxlength/segments；与 compileRenderer 一致）
         const renderer = compileRenderer(def)
@@ -754,10 +768,11 @@ export class ParticleRuntime {
     private warmup(res: SystemRes): void {
         const steps = Math.min(240 * 10, Math.ceil(res.handle.def.startTime * 60))
         this.writeFrameUniform(res.handle.def.startTime, 1 / 60)
-        this.writeSysUniform(res)
+        const all = [res, ...res.children]
+        for (const s of all) this.writeSysUniform(s)
         const encoder = this.device.createCommandEncoder()
         for (let i = 0; i < steps; i++) {
-            this.dispatchSystemPasses(encoder, res)
+            for (const s of all) this.dispatchSystemPasses(encoder, s)
         }
         this.device.queue.submit([encoder.finish()])
     }

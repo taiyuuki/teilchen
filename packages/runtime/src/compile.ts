@@ -25,6 +25,9 @@ import {
     RENDERER_OFFSET,
 } from './layout.ts'
 
+/** WE oscillate 系列的相位默认上界（弧度，参考实现 phasemax 默认 τ）。 */
+const TAU = Math.PI * 2
+
 export interface CompiledProgram {
     data:             Uint8Array;
     emitterCount:     number;
@@ -86,13 +89,17 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             break
         }
         const kindMap: Record<string, number> = {
-            lifetimerandom:        InitializerKind.LifetimeRandom,
-            sizerandom:            InitializerKind.SizeRandom,
-            alpharandom:           InitializerKind.AlphaRandom,
-            colorrandom:           InitializerKind.ColorRandom,
-            velocityrandom:        InitializerKind.VelocityRandom,
-            rotationrandom:        InitializerKind.RotationRandom,
-            angularvelocityrandom: InitializerKind.AngularVelocityRandom,
+            lifetimerandom:                  InitializerKind.LifetimeRandom,
+            sizerandom:                      InitializerKind.SizeRandom,
+            alpharandom:                     InitializerKind.AlphaRandom,
+            colorrandom:                     InitializerKind.ColorRandom,
+            velocityrandom:                  InitializerKind.VelocityRandom,
+            rotationrandom:                  InitializerKind.RotationRandom,
+            angularvelocityrandom:           InitializerKind.AngularVelocityRandom,
+            turbulentvelocityrandom:         InitializerKind.TurbulentVelocityRandom,
+            hsvcolorrandom:                  InitializerKind.HsvColorRandom,
+            mapsequencebetweencontrolpoints: InitializerKind.MapSequenceBetweenCPs,
+            mapsequencearoundcontrolpoint:   InitializerKind.MapSequenceAroundCP,
         }
         const kind = kindMap[raw.name]
         if (kind === undefined) {
@@ -118,6 +125,32 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             put4(f32, o + 4, mn[0], mn[1], mn[2], num(p.exponent, 1))
             put4(f32, o + 8, mx[0], mx[1], mx[2], 0)
         }
+        else if (kind === InitializerKind.TurbulentVelocityRandom) {
+
+            // a=(scale, speedmin, speedmax, timescale)  b=(phasemax, offset, -, -)
+            put4(f32, o + 4, num(p.scale, 0.2), num(p.speedmin, 0), num(p.speedmax, 100), num(p.timescale, 0))
+            put4(f32, o + 8, num(p.phasemax, 0), num(p.offset, 0), 0, 0)
+        }
+        else if (kind === InitializerKind.HsvColorRandom) {
+
+            // a=(huemin, huemax, satmin, satmax)  b=(valmin, valmax, -, -)
+            put4(f32, o + 4, num(p.huemin, 0), num(p.huemax, 1), num(p.saturationmin, 1), num(p.saturationmax, 1))
+            put4(f32, o + 8, num(p.valuemin, 1), num(p.valuemax, 1), 0, 0)
+        }
+        else if (kind === InitializerKind.MapSequenceBetweenCPs) {
+
+            // 按 spawn 序号沿线段 cs→ce 布点：pos += (ce-cs) × fract(seq/count)
+            put4(f32, o + 4, Math.trunc(num(p.controlpointstart)), Math.trunc(num(p.controlpointend, 1)), num(p.count, 100), 0)
+            put4(f32, o + 8, 0, 0, 0, 0)
+        }
+        else if (kind === InitializerKind.MapSequenceAroundCP) {
+
+            // 按 spawn 序号绕 cp 均匀转角（axis 取主分量：0=x/1=y/2=z）
+            const axis = vec(p.axis, [0, 1, 0])
+            const main = axis[1] >= axis[0] && axis[1] >= axis[2] ? 1 : axis[0] >= axis[2] ? 0 : 2
+            put4(f32, o + 4, Math.trunc(num(p.controlpoint)), num(p.count, 100), main, 0)
+            put4(f32, o + 8, 0, 0, 0, 0)
+        }
         else {
             put4(f32, o + 4, num(p.min), num(p.max), num(p.exponent, 1), 0)
             put4(f32, o + 8, 0, 0, 0, 0)
@@ -133,24 +166,32 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             break
         }
         const kindMap: Record<string, number> = {
-            movement:            OperatorKind.Movement,
-            angularmovement:     OperatorKind.AngularMovement,
-            alphafade:           OperatorKind.AlphaFade,
-            alphachange:         OperatorKind.AlphaChange,
-            sizechange:          OperatorKind.SizeChange,
-            colorchange:         OperatorKind.ColorChange,
-            oscillatealpha:      OperatorKind.OscillateAlpha,
-            oscillatesize:       OperatorKind.OscillateSize,
-            oscillateposition:   OperatorKind.OscillatePosition,
-            turbulence:          OperatorKind.Turbulence,
-            vortex:              OperatorKind.Vortex,
-            controlpointattract: OperatorKind.ControlPointAttract,
+            movement:                       OperatorKind.Movement,
+            angularmovement:                OperatorKind.AngularMovement,
+            alphafade:                      OperatorKind.AlphaFade,
+            alphachange:                    OperatorKind.AlphaChange,
+            sizechange:                     OperatorKind.SizeChange,
+            colorchange:                    OperatorKind.ColorChange,
+            oscillatealpha:                 OperatorKind.OscillateAlpha,
+            oscillatesize:                  OperatorKind.OscillateSize,
+            oscillateposition:              OperatorKind.OscillatePosition,
+            turbulence:                     OperatorKind.Turbulence,
+            vortex:                         OperatorKind.Vortex,
+            vortex_v2:                      OperatorKind.Vortex,
+            controlpointattract:            OperatorKind.ControlPointAttract,
+            maintaindistancetocontrolpoint: OperatorKind.MaintainDistanceToCP,
+            boids:                          OperatorKind.Boids,
         }
         const kind = kindMap[raw.name]
         if (kind === undefined) {
             warnings.push(`不支持的 operator "${raw.name}"，已跳过`)
             continue
         }
+        if (raw.name === 'boids' && def.maxCount > 256) {
+            warnings.push(`operator "boids"：容量 ${def.maxCount} 过大（O(N²) 邻居搜索限 256），已跳过`)
+            continue
+        }
+        const expandVortexV2Ring = raw.name === 'vortex_v2'
         const p = norm('operator', raw, warnings)
         const o = OPERATORS_OFFSET / 4 + operatorCount * (OPERATOR_STRIDE / 4)
         u32[o + 0] = kind
@@ -172,28 +213,35 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
                 break
             }
             case OperatorKind.AlphaFade:
-                put4(f32, a, num(p.fadeintime), num(p.fadeouttime), 0, 0)
+                // WE：fadeintime/fadeouttime 为寿命归一化进度 [0,1]（默认各 0.5）
+                put4(f32, a, num(p.fadeintime, 0.5), num(p.fadeouttime, 0.5), 0, 0)
                 break
             case OperatorKind.AlphaChange:
             case OperatorKind.SizeChange:
-                put4(f32, a, num(p.starttime), num(p.endtime, 1), num(p.startvalue), num(p.endvalue))
+                // WE ValueChange 默认：starttime 0 / endtime 1 / startvalue 1 / endvalue 0
+                put4(f32, a, num(p.starttime), num(p.endtime, 1), num(p.startvalue, 1), num(p.endvalue))
                 break
             case OperatorKind.ColorChange: {
                 const sv = vec(p.startvalue, [1, 1, 1])
-                const ev = vec(p.endvalue, [1, 1, 1])
+                const ev = vec(p.endvalue, [0, 0, 0])
                 put4(f32, a, num(p.starttime), num(p.endtime, 1), 0, 0)
                 put4(f32, b, sv[0], sv[1], sv[2], 0)
                 put4(f32, c, ev[0], ev[1], ev[2], 0)
                 break
             }
             case OperatorKind.OscillateAlpha:
+                // WE FrequencyValue 默认：freq 0-10、scale 0-1、phase 0-τ（振荡 scale 用于 alpha/size）
+                put4(f32, a, num(p.frequencymin), num(p.frequencymax, 10), num(p.scalemin), num(p.scalemax, 1))
+                put4(f32, b, num(p.phasemin), num(p.phasemax, TAU), 0, 0)
+                break
             case OperatorKind.OscillateSize:
-                put4(f32, a, num(p.frequencymin, 1), num(p.frequencymax, 1), num(p.scalemin), num(p.scalemax))
-                put4(f32, b, num(p.phasemin), num(p.phasemax), 0, 0)
+                // oscillatesize 的 scale 默认 0.8-1.2（绕初始值脉动）
+                put4(f32, a, num(p.frequencymin), num(p.frequencymax, 10), num(p.scalemin, 0.8), num(p.scalemax, 1.2))
+                put4(f32, b, num(p.phasemin), num(p.phasemax, TAU), 0, 0)
                 break
             case OperatorKind.OscillatePosition: {
-                const fm = vec(p.frequencymin, [1, 1, 1])
-                const fx = vec(p.frequencymax, [1, 1, 1])
+                const fm = vec(p.frequencymin, [0, 0, 0])
+                const fx = vec(p.frequencymax, [5, 5, 5])
                 const sm = vec(p.scalemin, [0, 0, 0])
                 const sx = vec(p.scalemax, [0, 0, 0])
                 const pm = vec(p.phasemin, [0, 0, 0])
@@ -215,7 +263,14 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             }
             case OperatorKind.Vortex: {
                 const axis = vec(p.axis, [0, 0, 1])
-                put4(f32, a, num(p.distanceinner, 10), num(p.distanceouter, 100), num(p.speedinner, 100), num(p.speedouter, 100))
+
+                // vortex_v2：以 ringradius 推导衰减区间（真展开为 vortex + maintain 两条，见后）；
+                // v2 的 speed 是 WE 内部量纲（约为像素速度 10 倍），×0.1 经验标定
+                const ring = expandVortexV2Ring ? num(p.ringradius, 100) : 0
+                const dInner = ring ? Math.max(1, ring - num(p.ringwidth, 5)) : num(p.distanceinner, 10)
+                const dOuter = ring ? ring * 2 : num(p.distanceouter, 100)
+                const sScale = expandVortexV2Ring ? 0.1 : 1
+                put4(f32, a, dInner, dOuter, num(p.speedinner, 100) * sScale, num(p.speedouter, 100) * sScale)
                 put4(f32, b, axis[0], axis[1], axis[2], Math.trunc(num(p.controlpoint)))
                 break
             }
@@ -225,6 +280,27 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
                 put4(f32, b, origin[0], origin[1], origin[2], Math.trunc(num(p.controlpoint)))
                 break
             }
+            case OperatorKind.MaintainDistanceToCP: {
+                put4(f32, a, num(p.distance, 256), num(p.variablestrength), 0, 0)
+                put4(f32, b, 0, 0, 0, Math.trunc(num(p.controlpoint)))
+                break
+            }
+            case OperatorKind.Boids: {
+
+                // a=(neighborthreshold, -, -, -)  b=(alignment, cohesion, separation, 0)
+                put4(f32, a, num(p.neighborthreshold, 100), 0, 0, 0)
+                put4(f32, b, num(p.alignmentfactor), num(p.cohesionfactor), num(p.separationfactor), 0)
+                break
+            }
+        }
+
+        // vortex_v2 真展开：vortex 条目后再补一条 maintain（ringradius 为环半径，ringpulldistance 折算弹簧强度）
+        if (expandVortexV2Ring && operatorCount + 1 < MAX_OPERATORS) {
+            const o2 = OPERATORS_OFFSET / 4 + (operatorCount + 1) * (OPERATOR_STRIDE / 4)
+            u32[o2 + 0] = OperatorKind.MaintainDistanceToCP
+            put4(f32, o2 + 4, num(p.ringradius, 100), Math.max(0.5, num(p.ringpulldistance, 250) / 50), 0, 0)
+            put4(f32, o2 + 8, 0, 0, 0, Math.trunc(num(p.controlpoint)))
+            operatorCount++
         }
         operatorCount++
     }
@@ -263,8 +339,9 @@ export function compileRenderer(def: ParticleSystemDef): CompiledRenderer {
     const warnings: string[] = []
     if (RENDERER_CODES[r.name] === undefined) warnings.push(`未知渲染器 "${r.name}"，降级 sprite`)
     const segments = mode === 2 ? Math.min(MAX_TRAIL_SEGMENTS, Math.max(2, Math.trunc(num(r.segments)) || 8)) : 0
-    const length = mode === 1 ? Math.max(0.001, num(r.length, 0.02)) : 0
-    const maxlength = mode === 1 || mode === 2 ? Math.max(0.01, num(r.maxlength, 5)) : 0
+    // WE 默认：spritetrail length 0.05 / maxlength 10（两参考实现一致）
+    const length = mode === 1 ? Math.max(0.001, num(r.length, 0.05)) : 0
+    const maxlength = mode === 1 || mode === 2 ? Math.max(0.01, num(r.maxlength, 10)) : 0
 
     return { mode, segments, length, maxlength, interval: segments > 1 ? maxlength / segments : maxlength, warnings }
 }
