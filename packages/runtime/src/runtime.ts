@@ -6,19 +6,22 @@
  */
 import type { ParticleSystemDef } from '@teilchen/core'
 import { compileProgram } from './compile.ts'
+import type { SpriteFrame } from './tex.ts'
 import {
     FRAME_UNIFORM_SIZE,
     INDIRECT_SIZE,
     MAX_CAPACITY,
+    MAX_SPRITE_FRAMES,
     PROGRAM_BUFFER_SIZE,
     SPAWN_WORKGROUPS,
+    SPRITE_UNIFORM_SIZE,
     SYS_BUFFER_SIZE,
     SYS_UNIFORM_SIZE,
     WORKGROUP_SIZE,
 } from './layout.ts'
 import { BILLBOARD_WGSL } from './shaders/billboard.wgsl.ts'
 import { COMPUTE_WGSL } from './shaders/compute.wgsl.ts'
-import { createHaloTexture } from './texture.ts'
+import { type TextureAsset, createHaloTexture } from './texture.ts'
 
 export interface RuntimeOptions {
     canvas:      HTMLCanvasElement;
@@ -29,8 +32,8 @@ export interface RuntimeOptions {
 
 export interface AddSystemOptions {
 
-    /** 粒子 sprite 贴图；缺省用程序化 halo。 */
-    texture?: GPUTexture;
+    /** 粒子 sprite 贴图；缺省用程序化 halo。可传 TextureAsset（含 .tex 的帧表/采样器）。 */
+    texture?: GPUTexture | TextureAsset;
     sampler?: GPUSampler;
 }
 
@@ -49,8 +52,8 @@ export interface UpdateSystemOptions {
     /** 同时清空粒子并重跑 warmup。 */
     reset?: boolean
 
-    /** 替换 sprite 贴图/采样器。 */
-    texture?: GPUTexture
+    /** 替换 sprite 贴图/采样器（TextureAsset 同时更新 sprite 帧表）。 */
+    texture?: GPUTexture | TextureAsset
     sampler?: GPUSampler
 }
 
@@ -76,6 +79,8 @@ interface SystemRes {
     freeList:       GPUBuffer
     renderIndices:  GPUBuffer
     sysUniform:     GPUBuffer
+    spriteUniform:  GPUBuffer
+    spriteFrames:   SpriteFrame[] | undefined
     indirect:       GPUBuffer
     statsStaging:   GPUBuffer | null
     statsPending:   boolean
@@ -170,6 +175,7 @@ export class ParticleRuntime {
                 { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
                 { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
                 { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+                { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
             ],
         })
         const renderLayout = device.createPipelineLayout({ bindGroupLayouts: [bglRender] })
@@ -241,8 +247,10 @@ export class ParticleRuntime {
         const freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
         const renderIndices = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
         const sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+        const spriteUniform = device.createBuffer({ size: SPRITE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         const indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
 
+        const tex = this.resolveTexture(opts)
         const res: SystemRes = {
             handle:         null!,
             def,
@@ -254,6 +262,8 @@ export class ParticleRuntime {
             freeList,
             renderIndices,
             sysUniform,
+            spriteUniform,
+            spriteFrames:   tex.frames,
             indirect,
             statsStaging:   device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
             statsPending:   false,
@@ -261,8 +271,8 @@ export class ParticleRuntime {
             bgCompute:      null!,
             bgRender:       null!,
             pipelineRender: this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!,
-            textureView:    opts.texture ? opts.texture.createView() : this.defaultTextureView,
-            sampler:        opts.sampler ?? this.defaultSampler,
+            textureView:    tex.view,
+            sampler:        opts.sampler ?? tex.sampler ?? this.defaultSampler,
         }
         res.handle = {
             id:                        this.nextId++,
@@ -274,6 +284,7 @@ export class ParticleRuntime {
         }
         this.writeProgramBuffer(res, compiled, capacity)
         this.makeBindGroups(res)
+        this.writeSpriteUniform(res)
         this.initAliveState(res)
         this.systems.push(res)
 
@@ -292,10 +303,15 @@ export class ParticleRuntime {
         const compiled = compileProgram(def)
         for (const w of compiled.warnings) this.onWarning(`[${def.name}] ${w}`)
 
+        const tex = opts.texture === undefined ? null : this.resolveTexture(opts)
         if (capacity === res.capacity) {
             this.writeProgramBuffer(res, compiled, capacity)
-            if (opts.texture || opts.sampler) {
-                if (opts.texture) res.textureView = opts.texture.createView()
+            if (tex || opts.sampler) {
+                if (tex) {
+                    res.textureView = tex.view
+                    res.spriteFrames = tex.frames
+                    if (!opts.sampler && tex.sampler) res.sampler = tex.sampler
+                }
                 if (opts.sampler) res.sampler = opts.sampler
                 this.makeBindGroups(res)
             }
@@ -313,7 +329,11 @@ export class ParticleRuntime {
             res.sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
             res.indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
             res.capacity = capacity
-            if (opts.texture) res.textureView = opts.texture.createView()
+            if (tex) {
+                res.textureView = tex.view
+                res.spriteFrames = tex.frames
+                if (!opts.sampler && tex.sampler) res.sampler = tex.sampler
+            }
             if (opts.sampler) res.sampler = opts.sampler
             this.makeBindGroups(res)
             this.writeProgramBuffer(res, compiled, capacity)
@@ -323,6 +343,7 @@ export class ParticleRuntime {
         res.def = def
         res.warnings = compiled.warnings
         res.pipelineRender = this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!
+        this.writeSpriteUniform(res)
 
         if (opts.reset) {
             this.initAliveState(res)
@@ -330,6 +351,44 @@ export class ParticleRuntime {
         }
 
         return compiled.warnings
+    }
+
+    /** 归一化贴图参数：GPUTexture 或带帧表的 TextureAsset。 */
+    private resolveTexture(opts: { texture?: GPUTexture | TextureAsset }): { view: GPUTextureView, sampler?: GPUSampler, frames?: SpriteFrame[] } {
+        const t = opts.texture
+        if (!t) return { view: this.defaultTextureView }
+        if ('createView' in t) return { view: t.createView() }
+
+        return { view: t.texture.createView(), sampler: t.sampler, frames: t.frames }
+    }
+
+    /** 把 def 的动画模式 + 帧表写进 sprite uniform（仅渲染侧使用）。 */
+    private writeSpriteUniform(res: SystemRes): void {
+        const def = res.def
+        const frames = (res.spriteFrames ?? []).slice(0, MAX_SPRITE_FRAMES)
+        const u = new Float32Array(SPRITE_UNIFORM_SIZE / 4)
+        const u32 = new Uint32Array(u.buffer)
+        if (frames.length) {
+            u32[0] = frames.length
+            u32[1] = def.animationMode === 'randomframe' ? 2 : 1
+            const avg = frames.reduce((a, f) => a + Math.max(f.frametime, 1e-4), 0) / frames.length
+            u[4] = avg
+            u[5] = def.sequenceMultiplier || 1
+            frames.forEach((f, i) => {
+                const o = 8 + i * 8
+                u[o] = f.x
+                u[o + 1] = f.y
+                u[o + 2] = f.xAxis[0]
+                u[o + 3] = f.xAxis[1]
+                u[o + 4] = f.yAxis[0]
+                u[o + 5] = f.yAxis[1]
+                u[o + 6] = f.frametime
+            })
+        }
+        else {
+            u32[0] = 0
+        }
+        this.device.queue.writeBuffer(res.spriteUniform, 0, u)
     }
 
     private writeProgramBuffer(res: SystemRes, compiled: { data: Uint8Array }, capacity: number): void {
@@ -362,6 +421,7 @@ export class ParticleRuntime {
                 { binding: 3, resource: { buffer: res.renderIndices } },
                 { binding: 4, resource: res.textureView },
                 { binding: 5, resource: res.sampler },
+                { binding: 6, resource: { buffer: res.spriteUniform } },
             ],
         })
     }
@@ -393,7 +453,7 @@ export class ParticleRuntime {
         const idx = this.systems.findIndex(s => s.handle.id === id)
         if (idx < 0) return
         const s = this.systems[idx]
-        for (const b of [s.program, s.particles, s.sys, s.freeList, s.renderIndices, s.sysUniform, s.indirect, s.statsStaging]) b?.destroy()
+        for (const b of [s.program, s.particles, s.sys, s.freeList, s.renderIndices, s.sysUniform, s.spriteUniform, s.indirect, s.statsStaging]) b?.destroy()
         this.systems.splice(idx, 1)
     }
 
@@ -456,6 +516,7 @@ export class ParticleRuntime {
     step(): void {
         this.simTime += 1 / 60
         this.renderFrame(1 / 60, true)
+        this.sampleStats(performance.now())
     }
 
     setPointer(canvasX: number, canvasY: number): void {

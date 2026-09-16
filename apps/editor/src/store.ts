@@ -16,8 +16,7 @@ import {
     serializeWeParticleJson,
     snowPreset,
 } from '@teilchen/core'
-import { ParticleRuntime, type SystemHandle } from '@teilchen/runtime'
-import { createHaloTexture, createTextureFromUrl, createWhiteTexture } from '@teilchen/runtime'
+import { ParticleRuntime, type SystemHandle, type TextureAsset, createHaloTexture, createTextureFromTex, createTextureFromUrl, createWhiteTexture  } from '@teilchen/runtime'
 
 export type Selection = { kind: 'system' } | { kind: ModuleKind, index: number }
 
@@ -53,7 +52,7 @@ export const editor = reactive({
     warnings:     [] as string[],
     gizmos:       true,
     paused:       false,
-    textureName:  'halo' as 'halo' | 'upload' | 'white',
+    textureName:  'halo' as TextureChoice | 'tex-sprite',
     runtimeReady: false,
 
     /** 鼠标世界坐标（gizmo 绘制用，与 runtime.setPointer 同步）。 */
@@ -182,14 +181,27 @@ export function exportWeJson(): void {
 
 // ---------------------------------------------------------------- 贴图
 
-export async function setTexture(name: 'halo' | 'upload' | 'white', file?: File): Promise<void> {
+export type TextureChoice = 'halo' | 'tex' | 'upload' | 'white'
+
+export async function setTexture(name: TextureChoice, file?: File): Promise<void> {
     if (!runtime || !handle) return
-    let tex: GPUTexture
+    let tex: GPUTexture | TextureAsset
     if (name === 'halo') {
         tex = createHaloTexture(runtime.device)
     }
     else if (name === 'white') {
         tex = createWhiteTexture(runtime.device)
+    }
+    else if (name === 'tex') {
+        if (!file) return
+        try {
+            tex = await createTextureFromTex(runtime.device, await file.arrayBuffer(), file.name)
+        }
+        catch(err) {
+            pushWarning(`.tex 解析失败: ${(err as Error).message}`)
+
+            return
+        }
     }
     else {
         if (!file) return
@@ -197,7 +209,7 @@ export async function setTexture(name: 'halo' | 'upload' | 'white', file?: File)
     }
     const old = currentTexture
     handle.update(editor.def, { texture: tex })
-    currentTexture = tex
-    editor.textureName = name
+    currentTexture = 'texture' in tex ? tex.texture : tex
+    editor.textureName = name === 'tex' && 'texture' in tex && tex.frames?.length ? 'tex-sprite' : name
     old?.destroy()
 }

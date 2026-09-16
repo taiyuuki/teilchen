@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { PRESET_DEFS, editor, exportWeJson, importWeJson, loadDef, setTexture } from '../store.ts'
+import { PRESET_DEFS, type TextureChoice, editor, exportWeJson, importWeJson, loadDef, setTexture } from '../store.ts'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const textureFile = ref<HTMLInputElement | null>(null)
+const texFile = ref<HTMLInputElement | null>(null)
 
 function onPreset(e: Event): void {
     const id = (e.target as HTMLSelectElement).value
@@ -20,9 +21,12 @@ async function onImportFile(e: Event): Promise<void> {
 }
 
 function onTextureSelect(e: Event): void {
-    const name = (e.target as HTMLSelectElement).value as 'halo' | 'upload' | 'white'
+    const name = (e.target as HTMLSelectElement).value as TextureChoice
     if (name === 'upload') {
         textureFile.value?.click()
+    }
+    else if (name === 'tex') {
+        texFile.value?.click()
     }
     else {
         void setTexture(name)
@@ -34,6 +38,13 @@ async function onTextureFile(e: Event): Promise<void> {
     const input = e.target as HTMLInputElement
     const file = input.files?.[0]
     if (file) await setTexture('upload', file)
+    input.value = ''
+}
+
+async function onTexFile(e: Event): Promise<void> {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (file) await setTexture('tex', file)
     input.value = ''
 }
 </script>
@@ -82,6 +93,12 @@ async function onTextureFile(e: Event): Promise<void> {
       <option value="upload">
         贴图：上传图片…
       </option>
+      <option
+        value="tex"
+        :selected="editor.textureName === 'tex' || editor.textureName === 'tex-sprite'"
+      >
+        贴图：导入 .tex（WE）…
+      </option>
     </select>
     <input
       ref="textureFile"
@@ -89,6 +106,13 @@ async function onTextureFile(e: Event): Promise<void> {
       accept="image/*"
       hidden
       @change="onTextureFile"
+    >
+    <input
+      ref="texFile"
+      type="file"
+      accept=".tex"
+      hidden
+      @change="onTexFile"
     >
   </header>
 </template>

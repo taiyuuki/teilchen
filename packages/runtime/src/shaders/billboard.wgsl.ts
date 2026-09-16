@@ -20,6 +20,11 @@ struct Particle {
   initColor: vec3f, initAlpha: f32,
   age: f32, spawnSequence: u32, state: u32, _pad: u32,
 };
+struct SpriteUniform {
+  params: vec4u,                    // x: frameCount  y: mode(0 无 / 1 sequence / 2 randomframe)
+  anim: vec4f,                      // x: 平均帧时长  y: sequenceMultiplier
+  frames: array<vec4f, 256>,        // [2i] = (x, y, xAxis.x, xAxis.y)  [2i+1] = (yAxis.x, yAxis.y, frametime, 0)
+};
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<uniform> sysUniform: SysUniform;
@@ -27,6 +32,7 @@ struct Particle {
 @group(0) @binding(3) var<storage, read> renderIndices: array<u32>;
 @group(0) @binding(4) var tex: texture_2d<f32>;
 @group(0) @binding(5) var samp: sampler;
+@group(0) @binding(6) var<uniform> sprite: SpriteUniform;
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -58,7 +64,25 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
 
   var o: VOut;
   o.pos = vec4f(ndc, 0.0, 1.0);
-  o.uv = c * 0.5 + vec2f(0.5);
+
+  // sprite sheet：quad uv → 图集 uv（xAxis/yAxis 支持 WE 的旋转打包）
+  var uv = c * 0.5 + vec2f(0.5);
+  let fc = sprite.params.x;
+  if (fc > 0u) {
+    var fi = 0u;
+    if (sprite.params.y == 2u) {
+      // randomframe：以粒子的 random 值选帧
+      fi = u32(min(p.random, 0.999) * f32(fc));
+    } else {
+      // sequence：按寿命循环播放（sequencemultiplier 加速）
+      let t = p.age * max(sprite.anim.y, 1e-4) / max(sprite.anim.x, 1e-4);
+      fi = u32(t) % fc;
+    }
+    let f0 = sprite.frames[fi * 2u];
+    let f1 = sprite.frames[fi * 2u + 1u];
+    uv = vec2f(f0.x, f0.y) + uv.x * vec2f(f0.z, f0.w) + uv.y * vec2f(f1.x, f1.y);
+  }
+  o.uv = uv;
   o.color = vec4f(p.color, clamp(p.alpha, 0.0, 1.0));
   return o;
 }

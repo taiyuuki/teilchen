@@ -1,4 +1,18 @@
-/** 纹理工具：程序化 halo 贴图 + 图片加载 + 手写 mipmap。 */
+/** 纹理工具：程序化 halo 贴图 + 图片加载 + WE .tex 加载 + 手写 mipmap。 */
+import type { SpriteFrame, TexImage } from './tex.ts'
+import { parseTex } from './tex.ts'
+
+/** 贴图资产：纹理 + 采样器 + 可选 sprite 帧表（WE .tex 加载的产物）。 */
+export interface TextureAsset {
+    texture:  GPUTexture
+    sampler?: GPUSampler
+
+    /** 归一化 UV 帧表；空表示整图单帧。 */
+    frames?: SpriteFrame[]
+
+    /** 展示名（编辑器用）。 */
+    label?: string
+}
 
 export function createHaloTexture(device: GPUDevice): GPUTexture {
     const size = 128
@@ -54,6 +68,47 @@ export function imageToTexture(device: GPUDevice, img: HTMLCanvasElement | HTMLI
 
     return texture
 }
+
+/** 解析 WE .tex 并上传为 TextureAsset（含 sprite 帧表与按 flags 的采样器）。 */
+export async function createTextureFromTex(device: GPUDevice, data: ArrayBuffer, label?: string): Promise<TextureAsset> {
+    const img = parseTex(data)
+    let texture: GPUTexture
+    if (img.container) {
+        const blob = new Blob([img.container.bytes.slice().buffer as ArrayBuffer], { type: img.container.mime })
+        const bitmap = await createImageBitmap(blob)
+        texture = imageToTexture(device, bitmap)
+    }
+    else {
+        texture = rgbaToTexture(device, img.rgba, img.width, img.height)
+    }
+    const filter = img.noInterpolation ? 'nearest' : 'linear'
+    const sampler = device.createSampler({
+        magFilter:    filter,
+        minFilter:    filter,
+        mipmapFilter: img.noInterpolation ? 'nearest' : 'linear',
+        addressModeU: img.clampUVs ? 'clamp-to-edge' : 'repeat',
+        addressModeV: img.clampUVs ? 'clamp-to-edge' : 'repeat',
+    })
+
+    return { texture, sampler, frames: img.frames.length ? img.frames : undefined, label }
+}
+
+export function rgbaToTexture(device: GPUDevice, rgba: Uint8Array, w: number, h: number): GPUTexture {
+    if (!w || !h || rgba.length < w * h * 4) throw new Error('rgba 数据与尺寸不符')
+    const mipLevelCount = Math.max(1, Math.floor(Math.log2(Math.max(w, h))))
+    const texture = device.createTexture({
+        size:   [w, h],
+        format: 'rgba8unorm',
+        usage:  GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+        mipLevelCount,
+    })
+    device.queue.writeTexture({ texture }, rgba, { bytesPerRow: w * 4 }, [w, h])
+    generateMips(device, texture, mipLevelCount)
+
+    return texture
+}
+
+export type { TexImage }
 
 /** 用 blit pass 生成 mipmap（WebGPU 无内置生成）。 */
 function generateMips(device: GPUDevice, texture: GPUTexture, mipLevelCount: number): void {

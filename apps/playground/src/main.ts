@@ -1,5 +1,5 @@
-import { PRESETS, type ParticleSystemDef, parseWeParticleJson } from '@teilchen/core'
-import { ParticleRuntime } from '@teilchen/runtime'
+import { PRESETS, type ParticleSystemDef, defaultSystem, parseWeParticleJson } from '@teilchen/core'
+import { ParticleRuntime, type TextureAsset, createTextureFromTex } from '@teilchen/runtime'
 
 const canvas = document.getElementById('view') as HTMLCanvasElement
 const warnEl = document.getElementById('warn') as HTMLDivElement
@@ -28,7 +28,17 @@ async function weImport(file: string, name: string): Promise<ParticleSystemDef> 
     return def
 }
 
-const EXAMPLES: { id: string, label: string, load: () => ParticleSystemDef | Promise<ParticleSystemDef> }[] = [
+// device 延迟获取（runtime 创建后才有）
+let sharedDevice: GPUDevice | null = null
+
+interface Example {
+    id:     string
+    label:  string
+    load:   () => ParticleSystemDef | Promise<ParticleSystemDef>
+    asset?: () => Promise<TextureAsset | null>
+}
+
+const EXAMPLES: Example[] = [
     ...PRESETS.map(p => ({ id: p.id, label: p.label, load: p.load })),
     { id: 'we-example', label: 'WE example.json（导入）', load: () => weImport('example.json', 'we-example') },
     {
@@ -36,7 +46,68 @@ const EXAMPLES: { id: string, label: string, load: () => ParticleSystemDef | Pro
         label: 'WE exampleturbolence.json（15k rate 压测）',
         load:  () => weImport('exampleturbolence.json', 'we-turbolence'),
     },
+    {
+        id:     'we-tex-sprite',
+        label:  'WE fish1.tex（.tex 解码 + sprite sequence 动画）',
+        load:   () => fishDef(),
+        asset:  () => loadTex('/we/fish1.tex'),
+    },
+    {
+        id:     'we-tex-halo',
+        label:  'WE halo.tex（.tex LZ4+BC 解码）',
+        load:   () => weImport('example.json', 'we-tex-halo'),
+        asset:  () => loadTex('/we/halo.tex'),
+    },
 ]
+
+function fishDef(): ParticleSystemDef {
+    const def = defaultSystem('fish-sprite')
+    def.material.blending = 'translucent'
+    def.maxCount = 60
+    def.animationMode = 'sequence'
+    def.emitters = [
+        {
+            name:        'sphererandom',
+            rate:        8,
+            origin:      [0, 0, 0],
+            directions:  [1, 1, 0],
+            distancemin: 300,
+            distancemax: 340,
+            speedmin:    20,
+            speedmax:    60,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 8, max: 12 },
+        { name: 'sizerandom', min: 120, max: 180 },
+        { name: 'rotationrandom', min: [0, 0, -0.5], max: [0, 0, 0.5] },
+        { name: 'velocityrandom', min: [-30, -20, 0], max: [30, 20, 0] },
+    ]
+    def.operators = [
+        { name: 'movement', gravity: [0, 0, 0], drag: 0.3 },
+        { name: 'alphafade', fadeintime: 0.5, fadeouttime: 0.8 },
+    ]
+
+    return def
+}
+
+async function loadTex(url: string): Promise<TextureAsset | null> {
+    if (!sharedDevice) return null
+    try {
+        const buf = await fetch(url).then(r => {
+            if (!r.ok) throw new Error(String(r.status))
+
+            return r.arrayBuffer()
+        })
+
+        return await createTextureFromTex(sharedDevice, buf)
+    }
+    catch(err) {
+        warn(`.tex 加载失败: ${(err as Error).message}`)
+
+        return null
+    }
+}
 
 // ---------------------------------------------------------------- 启动
 
@@ -47,13 +118,15 @@ async function main(): Promise<void> {
         return
     }
     const runtime = await ParticleRuntime.create({ canvas, onWarning: warn })
+    sharedDevice = runtime.device
 
     let current: { destroy(): void } | null = null
     async function loadExample(id: string): Promise<void> {
         if (current) current.destroy()
         const ex = EXAMPLES.find(e => e.id === id) ?? EXAMPLES[0]
         const def = await ex.load()
-        const handle = runtime.addSystem(def)
+        const asset = ex.asset ? await ex.asset() : null
+        const handle = runtime.addSystem(def, asset ? { texture: asset } : {})
         current = handle
     }
 
@@ -98,6 +171,9 @@ async function main(): Promise<void> {
         )
         statsEl.innerHTML = `fps <b>${s.fps || '—'}</b> · alive <b>${parts.alive.toLocaleString()}</b> · drawn <b>${parts.rendered.toLocaleString()}</b>`
     }, 250)
+
+    // 调试/自动化句柄（页面隐藏时 RAF 停转，可用 step() 同步步进）
+    Object.assign(window, { __teilchen: { runtime } })
 }
 
 main().catch(err => {
