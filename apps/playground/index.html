@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>teilchen playground</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #05070d; overflow: hidden; }
+    #app { width: 100%; height: 100%; }
+    canvas { width: 100%; height: 100%; display: block; }
+    .overlay {
+      position: fixed; top: 12px; left: 12px; z-index: 10;
+      font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #c8d3f5; background: rgba(10, 14, 26, 0.72);
+      border: 1px solid rgba(120, 140, 200, 0.25); border-radius: 8px;
+      padding: 10px 14px; user-select: none; backdrop-filter: blur(6px);
+      min-width: 240px;
+    }
+    .overlay h1 { font-size: 13px; margin: 0 0 6px; color: #8ab4ff; letter-spacing: 0.5px; }
+    .overlay select, .overlay button {
+      font: inherit; background: #141a2c; color: #c8d3f5;
+      border: 1px solid rgba(120, 140, 200, 0.35); border-radius: 4px;
+      padding: 2px 8px; cursor: pointer; margin-right: 6px;
+    }
+    .overlay button.active { background: #2a3a66; border-color: #8ab4ff; }
+    .stats { margin-top: 8px; color: #7f8db0; }
+    .stats b { color: #b7e28a; font-weight: normal; }
+    .warn { color: #e8b46a; margin-top: 6px; max-width: 340px; white-space: pre-wrap; }
+    .hint { position: fixed; bottom: 10px; left: 12px; z-index: 10; color: #4a5578;
+      font: 11px/1.4 ui-monospace, monospace; user-select: none; }
+    #unsupported {
+      position: fixed; inset: 0; display: none; place-items: center; color: #e8b46a;
+      font: 14px ui-monospace, monospace; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"><canvas id="view"></canvas></div>
+  <div class="overlay">
+    <h1>teilchen · WebGPU GPU VFX playground</h1>
+    <div>
+      <select id="example"></select>
+      <button id="play">⏸</button>
+      <button id="step">⏯</button>
+      <button id="reset">↺</button>
+    </div>
+    <div class="stats" id="stats">fps <b>—</b> · particles <b>—</b></div>
+    <div class="warn" id="warn"></div>
+  </div>
+  <div class="hint">move mouse → pointer controlpoint ·</div>
+  <div id="unsupported">当前浏览器不支持 WebGPU（需要 Chrome 113+ / Edge 113+ / Safari 26+）</div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "teilchen",
+  "private": true,
+  "version": "0.0.1",
+  "description": "WebGPU GPU VFX runtime & editor.",
+  "scripts": {
+    "dev": "pnpm --filter playground dev",
+    "typecheck": "tsc -b tsconfig.json"
+  },
+  "devDependencies": {
+    "@taiyuuki/eslint-config": "catalog:",
+    "@types/web": "catalog:",
+    "@webgpu/types": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

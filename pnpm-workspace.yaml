@@ -1,0 +1,16 @@
+packages:
+  - packages/*
+  - apps/*
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true
+
+catalog:
+  '@taiyuuki/eslint-config': "^1.6.9"
+  '@webgpu/types': "^0.1.60"
+  '@types/web': "^0.0.356"
+  eslint: "^10.10.0"
+  typescript: "^6.0.3"
+  vite: "^8.3.0"
+  esno: "^4.8.0"
+  rimraf: "^6.1.3"

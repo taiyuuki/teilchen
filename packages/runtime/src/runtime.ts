@@ -1,0 +1,528 @@
+/**
+ * ParticleRuntime —— WebGPU GPU 粒子模拟运行时。
+ *
+ * 模拟完全在 compute shader 中进行（free-list 槽位分配 + 原子计数），
+ * CPU 侧零回读；渲染走 indirect instanced billboard，实例数由 GPU 写出。
+ */
+import type { ParticleSystemDef } from '@teilchen/core'
+import { compileProgram } from './compile.ts'
+import {
+    FRAME_UNIFORM_SIZE,
+    INDIRECT_SIZE,
+    MAX_CAPACITY,
+    PROGRAM_BUFFER_SIZE,
+    SPAWN_WORKGROUPS,
+    SYS_BUFFER_SIZE,
+    SYS_UNIFORM_SIZE,
+    WORKGROUP_SIZE,
+} from './layout.ts'
+import { BILLBOARD_WGSL } from './shaders/billboard.wgsl.ts'
+import { COMPUTE_WGSL } from './shaders/compute.wgsl.ts'
+import { createHaloTexture } from './texture.ts'
+
+export interface RuntimeOptions {
+    canvas:      HTMLCanvasElement;
+    device?:     GPUDevice;
+    clearColor?: { r: number; g: number; b: number; a: number };
+    onWarning?:  (msg: string) => void;
+}
+
+export interface AddSystemOptions {
+
+    /** 粒子 sprite 贴图；缺省用程序化 halo。 */
+    texture?: GPUTexture;
+    sampler?: GPUSampler;
+}
+
+export interface SystemStats {
+    alive:    number;
+    rendered: number;
+}
+
+export interface RuntimeStats {
+    fps:     number;
+    systems: Record<string, SystemStats>;
+}
+
+export interface SystemHandle {
+    readonly id:       number;
+    readonly def:      ParticleSystemDef;
+    readonly warnings: string[];
+    readonly capacity: number;
+    destroy(): void;
+}
+
+interface SystemRes {
+    handle:         SystemHandle;
+    program:        GPUBuffer;
+    particles:      GPUBuffer;
+    sys:            GPUBuffer;
+    freeList:       GPUBuffer;
+    renderIndices:  GPUBuffer;
+    sysUniform:     GPUBuffer;
+    indirect:       GPUBuffer;
+    statsStaging:   GPUBuffer | null;
+    statsPending:   boolean;
+    stats:          SystemStats;
+    bgCompute:      GPUBindGroup;
+    bgRender:       GPUBindGroup;
+    pipelineRender: GPURenderPipeline;
+    textureView:    GPUTextureView;
+    sampler:        GPUSampler;
+}
+
+export class ParticleRuntime {
+    readonly device:             GPUDevice
+    readonly canvas:             HTMLCanvasElement
+    private readonly ctx:        GPUCanvasContext
+    private readonly format:     GPUTextureFormat
+    private readonly clearColor: GPUColor
+    private readonly onWarning:  (msg: string) => void
+
+    private readonly frameUniform:  GPUBuffer
+    private readonly computeModule: GPUShaderModule
+    private readonly pipelines: {
+        prepare:  GPUComputePipeline;
+        spawn:    GPUComputePipeline;
+        simulate: GPUComputePipeline;
+        finalize: GPUComputePipeline;
+    }
+    private readonly bglCompute:         GPUBindGroupLayout
+    private readonly renderPipelines:    Map<string, GPURenderPipeline>
+    private readonly defaultTextureView: GPUTextureView
+    private readonly defaultSampler:     GPUSampler
+
+    private systems: SystemRes[] = []
+    private nextId = 1
+
+    private raf = 0
+    private running = false
+    private playing = true
+    private time = 0
+    private lastNow = 0
+    private pointerWorld: [number, number] = [0, 0]
+
+    // stats
+    private fpsFrames = 0
+    private fpsLast = 0
+    private fps = 0
+    private statsClock = 0
+
+    private constructor(opts: RuntimeOptions, device: GPUDevice, ctx: GPUCanvasContext, format: GPUTextureFormat) {
+        this.device = device
+        this.canvas = opts.canvas
+        this.ctx = ctx
+        this.format = format
+        this.clearColor = opts.clearColor ?? { r: 0.016, g: 0.02, b: 0.03, a: 1 }
+        this.onWarning = opts.onWarning ?? (m => console.warn('[teilchen]', m))
+
+        this.frameUniform = device.createBuffer({ size: FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+
+        this.computeModule = device.createShaderModule({ code: COMPUTE_WGSL, label: 'compute' })
+
+        this.bglCompute = device.createBindGroupLayout({
+            label:   'compute-bgl',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+            ],
+        })
+        const computeLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bglCompute] })
+        const mk = (entryPoint: string) =>
+            device.createComputePipeline({ layout: computeLayout, compute: { module: this.computeModule, entryPoint } })
+        this.pipelines = {
+            prepare:  mk('prepareMain'),
+            spawn:    mk('spawnMain'),
+            simulate: mk('simulateMain'),
+            finalize: mk('finalizeMain'),
+        }
+
+        // render
+        const billboardModule = device.createShaderModule({ code: BILLBOARD_WGSL, label: 'billboard' })
+        const bglRender = device.createBindGroupLayout({
+            label:   'render-bgl',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+                { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+                { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+                { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+            ],
+        })
+        const renderLayout = device.createPipelineLayout({ bindGroupLayouts: [bglRender] })
+        this.renderPipelines = new Map()
+        for (const [name, blend] of [
+            ['additive', { color: { srcFactor: 'src-alpha' as GPUBlendFactor, dstFactor: 'one' as GPUBlendFactor, operation: 'add' as GPUBlendOperation }, alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } }],
+            ['translucent', {
+                color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            }],
+            ['normal', null],
+        ] as const) {
+            this.renderPipelines.set(
+                name,
+                device.createRenderPipeline({
+                    layout:   renderLayout,
+                    vertex:   { module: billboardModule, entryPoint: 'vs' },
+                    fragment: {
+                        module:     billboardModule,
+                        entryPoint: 'fs',
+                        targets:    [{ format: this.format, blend: blend ?? undefined }],
+                    },
+                    primitive: { topology: 'triangle-list' },
+                }),
+            )
+        }
+
+        const halo = createHaloTexture(device)
+        this.defaultTextureView = halo.createView()
+        this.defaultSampler = device.createSampler({
+            magFilter:    'linear',
+            minFilter:    'linear',
+            mipmapFilter: 'linear',
+        })
+
+        device.addEventListener?.('uncapturederror', e => {
+            this.onWarning(`GPU 错误: ${(e as GPUUncapturedErrorEvent).error.message}`)
+        })
+
+        window.addEventListener('resize', this.resize)
+        this.resize()
+    }
+
+    static async create(opts: RuntimeOptions): Promise<ParticleRuntime> {
+        if (!navigator.gpu) throw new Error('此浏览器不支持 WebGPU（需要 Chrome 113+ / Safari 26+）')
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
+        if (!adapter) throw new Error('无法获取 WebGPU adapter')
+        const device = opts.device ?? await adapter.requestDevice()
+        const ctx = opts.canvas.getContext('webgpu')
+        if (!ctx) throw new Error('无法获取 webgpu canvas context')
+        const format = navigator.gpu.getPreferredCanvasFormat()
+        ctx.configure({ device, format, alphaMode: 'opaque' })
+
+        return new ParticleRuntime(opts, device, ctx, format)
+    }
+
+    // ---------------------------------------------------------------- systems
+
+    addSystem(def: ParticleSystemDef, opts: AddSystemOptions = {}): SystemHandle {
+        const device = this.device
+        const capacity = Math.min(MAX_CAPACITY, Math.max(1, Math.round(def.maxCount)))
+
+        const compiled = compileProgram(def)
+        for (const w of compiled.warnings) this.onWarning(`[${def.name}] ${w}`)
+
+        const program = device.createBuffer({ size: PROGRAM_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+        const progData = new Uint8Array(compiled.data)
+        new Uint32Array(progData.buffer, PROGRAM_BUFFER_SIZE - 16, 4)[3] = capacity // counts.w
+        device.queue.writeBuffer(program, 0, progData)
+
+        const particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+        const sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
+        const freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+        const renderIndices = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
+        const sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+        const indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
+
+        this.initAliveState({ sys, freeList, particles, capacity })
+
+        const bgCompute = device.createBindGroup({
+            layout:  this.bglCompute,
+            entries: [
+                { binding: 0, resource: { buffer: this.frameUniform } },
+                { binding: 1, resource: { buffer: sysUniform } },
+                { binding: 2, resource: { buffer: sys } },
+                { binding: 3, resource: { buffer: particles } },
+                { binding: 4, resource: { buffer: program } },
+                { binding: 5, resource: { buffer: freeList } },
+                { binding: 6, resource: { buffer: renderIndices } },
+                { binding: 7, resource: { buffer: indirect } },
+            ],
+        })
+
+        const textureView = opts.texture ? opts.texture.createView() : this.defaultTextureView
+        const bglRender = this.renderPipelines.get('additive')!.getBindGroupLayout(0)
+        const bgRender = device.createBindGroup({
+            layout:  bglRender,
+            entries: [
+                { binding: 0, resource: { buffer: this.frameUniform } },
+                { binding: 1, resource: { buffer: sysUniform } },
+                { binding: 2, resource: { buffer: particles } },
+                { binding: 3, resource: { buffer: renderIndices } },
+                { binding: 4, resource: textureView },
+                { binding: 5, resource: opts.sampler ?? this.defaultSampler },
+            ],
+        })
+
+        const pipelineRender = this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!
+
+        const res: SystemRes = {
+            handle: {
+                id:       this.nextId++,
+                def,
+                warnings: compiled.warnings,
+                capacity,
+                destroy:  () => this.removeSystem(res.handle.id),
+            },
+            program,
+            particles,
+            sys,
+            freeList,
+            renderIndices,
+            sysUniform,
+            indirect,
+            statsStaging: device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+            statsPending: false,
+            stats:        { alive: 0, rendered: 0 },
+            bgCompute,
+            bgRender,
+            pipelineRender,
+            textureView,
+            sampler:      opts.sampler ?? this.defaultSampler,
+        }
+        this.systems.push(res)
+
+        // warmup（starttime：以 1/60s 预跑，GPU 空转不渲染）
+        if (def.startTime > 0) this.warmup(res)
+
+        return res.handle
+    }
+
+    private initAliveState(
+        b: SystemRes | { sys: GPUBuffer; freeList: GPUBuffer; particles: GPUBuffer; capacity: number },
+        zeroParticles = true,
+    ): void {
+        const capacity = 'capacity' in b ? b.capacity : b.handle.capacity
+        const free = new Uint32Array(capacity)
+        for (let i = 0; i < capacity; i++) free[i] = i
+        this.device.queue.writeBuffer(b.freeList, 0, free)
+        const counters = new Uint32Array(SYS_BUFFER_SIZE / 4)
+        counters[3] = capacity // freeCount
+        this.device.queue.writeBuffer(b.sys, 0, counters)
+        if (zeroParticles) {
+
+            // 清掉所有槽的 state（WebGPU 新建缓冲本为零，但 reset 时槽里有旧数据）
+            const zeros = new Uint32Array(256 * 1024) // 1MB 块
+            const total = capacity * 128
+            for (let off = 0; off < total; off += zeros.byteLength) {
+                const n = Math.min(zeros.byteLength, total - off)
+                this.device.queue.writeBuffer(b.particles, off, zeros.buffer, 0, n)
+            }
+        }
+    }
+
+    private removeSystem(id: number): void {
+        const idx = this.systems.findIndex(s => s.handle.id === id)
+        if (idx < 0) return
+        const s = this.systems[idx]
+        for (const b of [s.program, s.particles, s.sys, s.freeList, s.renderIndices, s.sysUniform, s.indirect, s.statsStaging]) b?.destroy()
+        this.systems.splice(idx, 1)
+    }
+
+    /** 重置所有系统（清空粒子、重建 free-list、时间归零、重跑 warmup）。 */
+    reset(): void {
+        this.time = 0
+        for (const s of this.systems) {
+            this.initAliveState(s, true)
+            if (s.handle.def.startTime > 0) this.warmup(s)
+        }
+    }
+
+    private warmup(res: SystemRes): void {
+        const steps = Math.min(240 * 10, Math.ceil(res.handle.def.startTime * 60))
+        this.writeFrameUniform(res.handle.def.startTime, 1 / 60)
+        this.writeSysUniform(res)
+        const encoder = this.device.createCommandEncoder()
+        for (let i = 0; i < steps; i++) {
+            this.dispatchSystemPasses(encoder, res)
+        }
+        this.device.queue.submit([encoder.finish()])
+    }
+
+    // ---------------------------------------------------------------- frame
+
+    start(): void {
+        if (this.running) return
+        this.running = true
+        this.lastNow = performance.now()
+        const loop = (now: number) => {
+            if (!this.running) return
+            this.tick(now)
+            this.raf = requestAnimationFrame(loop)
+        }
+        this.raf = requestAnimationFrame(loop)
+    }
+
+    stop(): void {
+        this.running = false
+        cancelAnimationFrame(this.raf)
+    }
+
+    setPaused(paused: boolean): void {
+        this.playing = !paused
+    }
+
+    /** 暂停时单步一帧（固定 1/60s）。 */
+    step(): void {
+        this.time += 1 / 60
+        this.renderFrame(1 / 60, true)
+    }
+
+    setPointer(canvasX: number, canvasY: number): void {
+        const dpr = this.canvas.width / this.canvas.clientWidth || 1
+        const px = canvasX * dpr
+        const py = canvasY * dpr
+        this.pointerWorld = [px - this.canvas.width / 2, this.canvas.height / 2 - py]
+    }
+
+    get stats(): RuntimeStats {
+        return { fps: this.fps, systems: Object.fromEntries(this.systems.map(s => [s.handle.def.name, s.stats])) }
+    }
+
+    private tick(now: number): void {
+        const dt = Math.min(1 / 30, Math.max(0, (now - this.lastNow) / 1000))
+        this.lastNow = now
+
+        this.fpsFrames++
+        if (now - this.fpsLast > 500) {
+            this.fps = Math.round(this.fpsFrames * 1000 / (now - this.fpsLast))
+            this.fpsFrames = 0
+            this.fpsLast = now
+        }
+
+        if (this.playing) this.time += dt
+        this.renderFrame(dt, this.playing)
+        this.sampleStats(now)
+    }
+
+    private renderFrame(dt: number, simulate: boolean): void {
+        if (!this.systems.length) {
+
+            // 仍然要出帧，保持 canvas 内容
+            const encoder = this.device.createCommandEncoder()
+            this.beginRender(encoder, () => {})
+            this.device.queue.submit([encoder.finish()])
+
+            return
+        }
+        this.writeFrameUniform(this.time, simulate ? dt : 0)
+        const encoder = this.device.createCommandEncoder()
+        for (const s of this.systems) {
+            this.writeSysUniform(s)
+            if (simulate) this.dispatchSystemPasses(encoder, s)
+        }
+        this.beginRender(encoder, pass => {
+            for (const s of this.systems) {
+                pass.setPipeline(s.pipelineRender)
+                pass.setBindGroup(0, s.bgRender)
+                pass.drawIndirect(s.indirect, 0)
+            }
+        })
+        this.device.queue.submit([encoder.finish()])
+    }
+
+    private dispatchSystemPasses(encoder: GPUCommandEncoder, s: SystemRes): void {
+        const capacity = s.handle.capacity
+        const pass = encoder.beginComputePass()
+        pass.setBindGroup(0, s.bgCompute)
+        pass.setPipeline(this.pipelines.prepare)
+        pass.dispatchWorkgroups(1)
+        pass.setPipeline(this.pipelines.spawn)
+        pass.dispatchWorkgroups(SPAWN_WORKGROUPS)
+        pass.setPipeline(this.pipelines.simulate)
+        pass.dispatchWorkgroups(Math.ceil(capacity / WORKGROUP_SIZE))
+        pass.setPipeline(this.pipelines.finalize)
+        pass.dispatchWorkgroups(1)
+        pass.end()
+    }
+
+    private beginRender(encoder: GPUCommandEncoder, draw: (pass: GPURenderPassEncoder) => void): void {
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [
+                {
+                    view:       this.ctx.getCurrentTexture().createView(),
+                    clearValue: this.clearColor,
+                    loadOp:     'clear',
+                    storeOp:    'store',
+                },
+            ],
+        })
+        draw(pass)
+        pass.end()
+    }
+
+    private writeFrameUniform(time: number, dt: number): void {
+        const f = new Float32Array(FRAME_UNIFORM_SIZE / 4)
+        f[0] = time
+        f[1] = dt
+        f[2] = this.canvas.width
+        f[3] = this.canvas.height
+        this.device.queue.writeBuffer(this.frameUniform, 0, f)
+    }
+
+    private writeSysUniform(s: SystemRes): void {
+        const u = new Float32Array(SYS_UNIFORM_SIZE / 4)
+        const def = s.handle.def
+        u[0] = def.origin[0]
+        u[1] = def.origin[1]
+        u[2] = def.origin[2]
+        u[4] = this.pointerWorld[0]
+        u[5] = this.pointerWorld[1]
+
+        // control points：世界坐标 = origin + offset (+ 指针跟随)
+        for (let i = 0; i < 8; i++) {
+            const cp = def.controlPoints[i]
+            const o = 8 + i * 4
+            u[o] = def.origin[0] + cp.offset[0] + (cp.lockToPointer ? this.pointerWorld[0] : 0)
+            u[o + 1] = def.origin[1] + cp.offset[1] + (cp.lockToPointer ? this.pointerWorld[1] : 0)
+            u[o + 2] = def.origin[2] + cp.offset[2]
+        }
+        this.device.queue.writeBuffer(s.sysUniform, 0, u)
+    }
+
+    private sampleStats(now: number): void {
+        if (now - this.statsClock < 500) return
+        this.statsClock = now
+        for (const s of this.systems) {
+            if (s.statsPending || !s.statsStaging) continue
+            s.statsPending = true
+            const encoder = this.device.createCommandEncoder()
+            encoder.copyBufferToBuffer(s.sys, 0, s.statsStaging, 0, 16)
+            this.device.queue.submit([encoder.finish()])
+            s.statsStaging
+                .mapAsync(GPUMapMode.READ)
+                .then(() => {
+                    const data = new Uint32Array(s.statsStaging!.getMappedRange(), 0, 4)
+                    s.stats = { alive: data[0], rendered: data[1] }
+                    s.statsStaging!.unmap()
+                    s.statsPending = false
+                })
+                .catch(() => {
+                    s.statsPending = false
+                })
+        }
+    }
+
+    private resize = (): void => {
+        const dpr = Math.min(2, window.devicePixelRatio || 1)
+        const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr))
+        const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr))
+        if (this.canvas.width !== w || this.canvas.height !== h) {
+            this.canvas.width = w
+            this.canvas.height = h
+        }
+    }
+
+    destroy(): void {
+        this.stop()
+        window.removeEventListener('resize', this.resize)
+        for (const s of [...this.systems]) this.removeSystem(s.handle.id)
+    }
+}
