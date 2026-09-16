@@ -7,6 +7,7 @@ allowBuilds:
 
 catalog:
   '@taiyuuki/eslint-config': "^1.6.9"
+  "@types/node": "^22.20.2"
   '@webgpu/types': "^0.1.60"
   '@types/web': "^0.0.356"
   '@vitejs/plugin-vue': "^6.0.0"

@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "@taiyuuki/eslint-config": "catalog:",
+    "@types/node": "catalog:",
     "@types/web": "catalog:",
     "@webgpu/types": "catalog:",
     "eslint": "catalog:",
