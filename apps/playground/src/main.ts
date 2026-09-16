@@ -32,14 +32,16 @@ async function weImport(file: string, name: string): Promise<ParticleSystemDef> 
 let sharedDevice: GPUDevice | null = null
 
 interface Example {
-    id:     string
-    label:  string
-    load:   () => ParticleSystemDef | Promise<ParticleSystemDef>
+    id:    string
+    label: string
+
+    /** 返回单系统或多个系统（同帧叠加演示）。 */
+    load:   () => ParticleSystemDef | ParticleSystemDef[] | Promise<ParticleSystemDef | ParticleSystemDef[]>
     asset?: () => Promise<TextureAsset | null>
 }
 
 const EXAMPLES: Example[] = [
-    ...PRESETS.map(p => ({ id: p.id, label: p.label, load: p.load })),
+    ...PRESETS.map((p): Example => ({ id: p.id, label: p.label, load: p.load })),
     { id: 'we-example', label: 'WE example.json（导入）', load: () => weImport('example.json', 'we-example') },
     {
         id:    'we-turbolence',
@@ -51,6 +53,11 @@ const EXAMPLES: Example[] = [
         label:  'WE fish1.tex（.tex 解码 + sprite sequence 动画）',
         load:   () => fishDef(),
         asset:  () => loadTex('/we/fish1.tex'),
+    },
+    {
+        id:    'blend-modes',
+        label: 'blend modes（colorBlendMode 双系统合成）',
+        load:  () => [blendFieldDef(), blenderDef()],
     },
     {
         id:     'we-tex-halo',
@@ -120,14 +127,15 @@ async function main(): Promise<void> {
     const runtime = await ParticleRuntime.create({ canvas, onWarning: warn })
     sharedDevice = runtime.device
 
-    let current: { destroy(): void } | null = null
+    const currentHandles: { destroy(): void }[] = []
     async function loadExample(id: string): Promise<void> {
-        if (current) current.destroy()
+        for (const h of currentHandles) h.destroy()
+        currentHandles.length = 0
         const ex = EXAMPLES.find(e => e.id === id) ?? EXAMPLES[0]
-        const def = await ex.load()
+        const result = await ex.load()
+        const defs = Array.isArray(result) ? result : [result]
         const asset = ex.asset ? await ex.asset() : null
-        const handle = runtime.addSystem(def, asset ? { texture: asset } : {})
-        current = handle
+        for (const def of defs) currentHandles.push(runtime.addSystem(def, asset ? { texture: asset } : {}))
     }
 
     for (const ex of EXAMPLES) {
@@ -180,3 +188,73 @@ main().catch(err => {
     warn(`启动失败: ${err?.message ?? err}`)
     console.error(err)
 })
+
+// ---------------------------------------------------------------- colorBlendMode 演示
+
+/** 背景场：大尺寸半透明色块铺出可被合成的底图。 */
+function blendFieldDef(): ParticleSystemDef {
+    const def = defaultSystem('blend-field')
+    def.material.blending = 'translucent'
+    def.maxCount = 60
+    def.emitters = [
+        {
+            name:        'boxrandom',
+            rate:        6,
+            origin:      [0, 0, 0],
+            directions:  [1, 1, 0],
+            distancemin: [-560, -320, 0],
+            distancemax: [560, 320, 0],
+            speedmin:    0,
+            speedmax:    0,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 10, max: 16 },
+        { name: 'sizerandom', min: 240, max: 420, exponent: 1 },
+        { name: 'velocityrandom', min: [-12, -8, 0], max: [12, 8, 0] },
+        { name: 'colorrandom', min: [255, 120, 60], max: [80, 60, 255] },
+    ]
+    def.operators = [{ name: 'alphafade', fadeintime: 1.5, fadeouttime: 2.0 }]
+
+    return def
+}
+
+/** 前景：Difference 混合的涡流粒子（对背景快照做差值合成）。 */
+function blenderDef(): ParticleSystemDef {
+    const def = defaultSystem('blend-difference')
+    def.material.blending = 'translucent'
+    def.material.colorBlendMode = 18 // Difference
+    def.maxCount = 4000
+    def.emitters = [
+        {
+            name:        'sphererandom',
+            rate:        320,
+            origin:      [0, 0, 0],
+            directions:  [1, 1, 0],
+            distancemin: 120,
+            distancemax: 300,
+            speedmin:    0,
+            speedmax:    0,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 4, max: 8 },
+        { name: 'sizerandom', min: 20, max: 60, exponent: 1.5 },
+        { name: 'colorrandom', min: [255, 255, 255], max: [255, 255, 255] },
+    ]
+    def.operators = [
+        { name: 'movement', gravity: [0, 0, 0], drag: 1.2 },
+        {
+            name:           'vortex',
+            controlpoint:   0,
+            axis:           [0, 0, 1],
+            distanceinner:  60,
+            distanceouter:  340,
+            speedinner:     380,
+            speedouter:     90,
+        },
+        { name: 'alphafade', fadeintime: 0.5, fadeouttime: 1.0 },
+    ]
+
+    return def
+}

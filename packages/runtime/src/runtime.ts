@@ -29,9 +29,9 @@ import {
     SYS_UNIFORM_SIZE,
     WORKGROUP_SIZE,
 } from './layout.ts'
-import { BILLBOARD_WGSL } from './shaders/billboard.wgsl.ts'
+import { BILLBOARD_WGSL, BLIT_WGSL } from './shaders/billboard.wgsl.ts'
 import { COMPUTE_WGSL } from './shaders/compute.wgsl.ts'
-import { type TextureAsset, createHaloTexture } from './texture.ts'
+import { type TextureAsset, createHaloTexture, createWhiteTexture } from './texture.ts'
 
 export interface RuntimeOptions {
     canvas:      HTMLCanvasElement;
@@ -160,6 +160,13 @@ export class ParticleRuntime {
     private readonly bglCompute:         GPUBindGroupLayout
     private readonly renderPipelines:    Map<string, GPURenderPipeline>
     private readonly defaultTextureView: GPUTextureView
+    private readonly whiteTexture:       GPUTexture
+    private bglBg:                       GPUBindGroupLayout
+    private bgTexture:                   GPUTexture | null = null
+    private bgSnapshotGroup:             GPUBindGroup | null = null
+    private blitPipeline:                GPURenderPipeline
+    private blitGroup:                   GPUBindGroup | null = null
+    private bgPlaceholderGroup:          GPUBindGroup | null = null
     private readonly defaultSampler:     GPUSampler
 
     private systems: SystemRes[] = []
@@ -236,11 +243,15 @@ export class ParticleRuntime {
                 { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
                 { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
                 { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-                { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+                { binding: 6, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
                 { binding: 7, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
             ],
         })
-        const renderLayout = device.createPipelineLayout({ bindGroupLayouts: [bglRender] })
+        this.bglBg = device.createBindGroupLayout({
+            label:   'render-bg-bgl',
+            entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } }],
+        })
+        const renderLayout = device.createPipelineLayout({ bindGroupLayouts: [bglRender, this.bglBg] })
         this.renderPipelines = new Map()
         for (const [name, blend] of [
             ['additive', { color: { srcFactor: 'src-alpha' as GPUBlendFactor, dstFactor: 'one' as GPUBlendFactor, operation: 'add' as GPUBlendOperation }, alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } }],
@@ -267,6 +278,15 @@ export class ParticleRuntime {
 
         const halo = createHaloTexture(device)
         this.defaultTextureView = halo.createView()
+        this.whiteTexture = createWhiteTexture(device)
+
+        // 全屏 blit：离屏场景 → 画布（pass B 的底图）
+        const blitShader = device.createShaderModule({ code: BLIT_WGSL, label: 'blit' })
+        this.blitPipeline = device.createRenderPipeline({
+            layout:   'auto',
+            vertex:   { module: blitShader, entryPoint: 'vs' },
+            fragment: { module: blitShader, entryPoint: 'fs', targets: [{ format: this.format }] },
+        })
         this.defaultSampler = device.createSampler({
             magFilter:    'linear',
             minFilter:    'linear',
@@ -279,6 +299,13 @@ export class ParticleRuntime {
 
         window.addEventListener('resize', this.resize)
         this.resize()
+        this.ensureBgTexture()
+
+        // pass A（无混合）绑白色占位 —— fs 分支不采样，仅满足布局
+        this.bgPlaceholderGroup = this.device.createBindGroup({
+            layout:  this.bglBg,
+            entries: [{ binding: 0, resource: this.whiteTexture.createView() }],
+        })
     }
 
     static async create(opts: RuntimeOptions): Promise<ParticleRuntime> {
@@ -372,7 +399,7 @@ export class ParticleRuntime {
             stats:          { alive: 0, rendered: 0 },
             bgCompute:      null!,
             bgRender:       null!,
-            pipelineRender: this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!,
+            pipelineRender: this.pickRenderPipeline(def),
             textureView:    tex.view,
             sampler:        opts.sampler ?? tex.sampler ?? this.defaultSampler,
             role,
@@ -564,7 +591,7 @@ export class ParticleRuntime {
 
         res.def = def
         res.warnings = compiled.warnings
-        res.pipelineRender = this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!
+        res.pipelineRender = this.pickRenderPipeline(def)
         this.writeSpriteUniform(res)
 
         if (opts.reset) {
@@ -618,6 +645,7 @@ export class ParticleRuntime {
         u[ro + 1] = renderer.length
         u[ro + 2] = renderer.maxlength
         u[ro + 3] = renderer.segments
+        u[ro + 4] = Math.min(31, Math.max(0, Math.trunc(def.material.colorBlendMode) || 0))
         this.device.queue.writeBuffer(res.spriteUniform, 0, u)
     }
 
@@ -808,11 +836,18 @@ export class ParticleRuntime {
     }
 
     private renderFrame(dt: number, simulate: boolean): void {
-        if (!this.systems.length) {
+        if (!this.systems.length || !this.bgTexture || !this.blitGroup) {
 
-            // 仍然要出帧，保持 canvas 内容
+            // 仍然要出帧（离屏清屏 + blit）
             const encoder = this.device.createCommandEncoder()
-            this.beginRender(encoder, () => {})
+            this.drawSystems(encoder, [], this.bgTexture?.createView() ?? this.ctx.getCurrentTexture().createView(), this.clearColor, this.bgPlaceholderGroup!)
+            if (this.blitGroup && this.bgTexture) {
+                this.beginRender(encoder, pass => {
+                    pass.setPipeline(this.blitPipeline)
+                    pass.setBindGroup(0, this.blitGroup)
+                    pass.draw(3)
+                })
+            }
             this.device.queue.submit([encoder.finish()])
 
             return
@@ -834,15 +869,36 @@ export class ParticleRuntime {
             for (const s of ropeSystems) this.runRopeSort(s)
         }
 
+        // pass A：正常系统 → 离屏场景纹理；pass B：blit 底图 + colorBlendMode 系统（采样离屏合成）
+        const blended = this.systems.filter(s => s.def.material.colorBlendMode > 0)
+        const normal = this.systems.filter(s => s.def.material.colorBlendMode === 0)
         const renderEncoder = this.device.createCommandEncoder()
+        this.drawSystems(renderEncoder, normal, this.bgTexture!.createView(), this.clearColor, this.bgPlaceholderGroup!)
         this.beginRender(renderEncoder, pass => {
-            for (const s of this.systems) {
+            pass.setPipeline(this.blitPipeline)
+            pass.setBindGroup(0, this.blitGroup!)
+            pass.draw(3)
+            if (blended.length && this.bgSnapshotGroup) {
+                pass.setBindGroup(1, this.bgSnapshotGroup)
+                for (const s of blended) {
+                    pass.setPipeline(s.pipelineRender)
+                    pass.setBindGroup(0, s.bgRender)
+                    pass.drawIndirect(s.indirect, 0)
+                }
+            }
+        })
+        this.device.queue.submit([renderEncoder.finish()])
+    }
+
+    private drawSystems(encoder: GPUCommandEncoder, systems: SystemRes[], target: GPUTextureView, clearValue: GPUColor, bgGroup: GPUBindGroup): void {
+        this.beginRenderOn(encoder, target, clearValue, pass => {
+            pass.setBindGroup(1, bgGroup)
+            for (const s of systems) {
                 pass.setPipeline(s.pipelineRender)
                 pass.setBindGroup(0, s.bgRender)
                 pass.drawIndirect(s.indirect, 0)
             }
         })
-        this.device.queue.submit([renderEncoder.finish()])
     }
 
     /** rope 排序：init（count 之后置 INVALID）+ bitonic 全网络（按 spawnSequence 升序）。 */
@@ -905,12 +961,23 @@ export class ParticleRuntime {
         pass.end()
     }
 
+    /** colorBlendMode > 0 的系统：合成在 shader 内完成后按 translucent 上屏。 */
+    private pickRenderPipeline(def: ParticleSystemDef): GPURenderPipeline {
+        if (def.material.colorBlendMode > 0) return this.renderPipelines.get('translucent')!
+
+        return this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!
+    }
+
     private beginRender(encoder: GPUCommandEncoder, draw: (pass: GPURenderPassEncoder) => void): void {
+        this.beginRenderOn(encoder, this.ctx.getCurrentTexture().createView(), this.clearColor, draw)
+    }
+
+    private beginRenderOn(encoder: GPUCommandEncoder, target: GPUTextureView, clearValue: GPUColor, draw: (pass: GPURenderPassEncoder) => void): void {
         const pass = encoder.beginRenderPass({
             colorAttachments: [
                 {
-                    view:       this.ctx.getCurrentTexture().createView(),
-                    clearValue: this.clearColor,
+                    view:       target,
+                    clearValue,
                     loadOp:     'clear',
                     storeOp:    'store',
                 },
@@ -979,7 +1046,32 @@ export class ParticleRuntime {
         if (this.canvas.width !== w || this.canvas.height !== h) {
             this.canvas.width = w
             this.canvas.height = h
+            this.ensureBgTexture()
         }
+    }
+
+    /** 离屏场景纹理：pass A 的渲染目标，也是混合模式系统的采样源。 */
+    private ensureBgTexture(): void {
+        const w = this.canvas.width
+        const h = this.canvas.height
+        if (this.bgTexture && this.bgTexture.width === w && this.bgTexture.height === h) return
+        this.bgTexture?.destroy()
+        this.bgTexture = this.device.createTexture({
+            size:   [w, h],
+            format: this.format,
+            usage:  GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        })
+        this.bgSnapshotGroup = this.device.createBindGroup({
+            layout:  this.bglBg,
+            entries: [{ binding: 0, resource: this.bgTexture.createView() }],
+        })
+        this.blitGroup = this.device.createBindGroup({
+            layout:  this.blitPipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: this.bgTexture.createView() },
+                { binding: 1, resource: this.defaultSampler },
+            ],
+        })
     }
 
     destroy(): void {

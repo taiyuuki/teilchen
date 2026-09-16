@@ -274,3 +274,39 @@ export function registerBuiltins(): void {
 }
 
 registerBuiltins()
+
+/** WE colorBlendMode 编号 → 名称（与 shader applyBlend 一致；0 = 无）。 */
+export const COLOR_BLEND_MODES: { value: number, label: string }[] = [
+    { value: 0, label: '无（None）' },
+    { value: 1, label: 'Darken 变暗' },
+    { value: 2, label: 'Multiply 正片叠底' },
+    { value: 3, label: 'Color Burn 颜色加深' },
+    { value: 4, label: 'Linear Burn 线性加深' },
+    { value: 5, label: 'Darker Color 深色' },
+    { value: 6, label: 'Lighten 变亮' },
+    { value: 7, label: 'Screen 滤色' },
+    { value: 8, label: 'Color Dodge 颜色减淡' },
+    { value: 9, label: 'Linear Dodge 线性减淡' },
+    { value: 10, label: 'Lighter Color 浅色' },
+    { value: 11, label: 'Overlay 叠加' },
+    { value: 12, label: 'Soft Light 柔光' },
+    { value: 13, label: 'Hard Light 强光' },
+    { value: 14, label: 'Vivid Light 亮光' },
+    { value: 15, label: 'Linear Light 线性光' },
+    { value: 16, label: 'Pin Light 点光' },
+    { value: 17, label: 'Hard Mix 实色混合' },
+    { value: 18, label: 'Difference 差值' },
+    { value: 19, label: 'Exclusion 排除' },
+    { value: 20, label: 'Subtract 减去' },
+    { value: 21, label: 'Reflect' },
+    { value: 22, label: 'Glow' },
+    { value: 23, label: 'Phoenix' },
+    { value: 24, label: 'Average' },
+    { value: 25, label: 'Negation' },
+    { value: 26, label: 'Hue 色相' },
+    { value: 27, label: 'Saturation 饱和度' },
+    { value: 28, label: 'Color 颜色' },
+    { value: 29, label: 'Luminosity 明度' },
+    { value: 30, label: 'Tint' },
+    { value: 31, label: 'A+B（附加）' },
+]

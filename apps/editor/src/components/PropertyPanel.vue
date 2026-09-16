@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import {
     type BlendMode,
+    COLOR_BLEND_MODES,
     type ModuleKind,
     type ParticleModule,
     type Vec3,
@@ -88,6 +89,18 @@ function setCpOffset(cpIndex: number, i: number, e: Event): void {
             :value="b"
           >
             {{ b }}
+          </option>
+        </select>
+      </div>
+      <div class="param">
+        <label>颜色混合 BlendMode</label>
+        <select v-model="editor.def.material.colorBlendMode">
+          <option
+            v-for="m in COLOR_BLEND_MODES"
+            :key="m.value"
+            :value="m.value"
+          >
+            {{ m.value }} · {{ m.label }}
           </option>
         </select>
       </div>

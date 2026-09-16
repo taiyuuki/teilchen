@@ -25,6 +25,9 @@ export interface MaterialDef {
     /** WE 材质 json 的 passes[0].blending。 */
     blending: BlendMode;
 
+    /** WE colorBlendMode（0 无 / 1-31 Photoshop 式合成，shader 内采样背景实现）。 */
+    colorBlendMode: number;
+
     /** WE 材质 json 的 passes[0].textures（贴图路径列表，第 0 张为粒子 sprite）。 */
     textures:   string[];
     depthTest:  boolean;
@@ -100,7 +103,7 @@ export interface ParticleSystemDef {
 export const MAX_CONTROL_POINTS = 8
 
 export function defaultMaterial(): MaterialDef {
-    return { blending: 'additive', textures: [], depthTest: false, depthWrite: false }
+    return { blending: 'additive', textures: [], colorBlendMode: 0, depthTest: false, depthWrite: false }
 }
 
 export function defaultControlPoints(): ControlPointDef[] {

@@ -73,5 +73,6 @@ pnpm typecheck
 - [x] rope/ropetrail/spritetrail 渲染器 ✓ —— spritetrail（速度拉伸拖影，无额外缓冲）、
       ropetrail（时间分桶历史环形缓冲 + 相邻点连段，出生预填平滑长出）、
       rope（renderIndices bitonic 排序按 spawnSequence 连段，逐 pass 提交驱动排序网络）
-- [ ] 31 种 colorBlendMode shader 化（`.tex` 解码与 sprite sheet 动画已完成 ✓）
+- [x] 31 种 colorBlendMode ✓ —— shader 内采样离屏场景纹理做 Photoshop 式合成（WE `_rt_FullFrameBuffer` 语义）；
+      pass A 正常系统 → 离屏，pass B blit + 混合系统（Multiply/Screen/Overlay/HSL 全家）
 - [ ] 音频响应（FFT → uniform）、场景多层合成、pkg 容器读取、导出独立 HTML

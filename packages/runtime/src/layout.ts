@@ -72,8 +72,8 @@ export const MAX_TRAIL_SEGMENTS = 64
 /** sprite 动画 + 渲染器参数 uniform（render 侧）。 */
 export const MAX_SPRITE_FRAMES = 128
 
-/** params vec4u + anim vec4f + 每帧 2×vec4f + renderer vec4f（mode/length/maxlength/segments）。 */
-export const SPRITE_UNIFORM_SIZE = 32 + MAX_SPRITE_FRAMES * 2 * 16 + 16
+/** params vec4u + anim vec4f + 每帧 2×vec4f + renderer vec4f + blend vec4f。 */
+export const SPRITE_UNIFORM_SIZE = 32 + MAX_SPRITE_FRAMES * 2 * 16 + 32
 
 // ---- 模块 kind 枚举（与 WGSL switch 一致） ----
 export const EmitterKind = { BoxRandom: 0, SphereRandom: 1 } as const

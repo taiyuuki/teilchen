@@ -9,6 +9,9 @@ catalogs:
     '@taiyuuki/eslint-config':
       specifier: ^1.6.9
       version: 1.6.9
+    '@types/node':
+      specifier: ^22.20.2
+      version: 22.20.2
     '@types/web':
       specifier: ^0.0.356
       version: 0.0.356
@@ -42,7 +45,7 @@ importers:
         specifier: 'catalog:'
         version: 1.6.9(@typescript-eslint/parser@8.70.0(eslint@10.10.0)(typescript@6.0.3))(@typescript-eslint/utils@8.70.0(eslint@10.10.0)(typescript@6.0.3))(eslint@10.10.0)(typescript@6.0.3)
       '@types/node':
-        specifier: ^22.20.2
+        specifier: 'catalog:'
         version: 22.20.2
       '@types/web':
         specifier: 'catalog:'

@@ -32,6 +32,7 @@ struct SpriteUniform {
   anim: vec4f,                      // x: 平均帧时长  y: sequenceMultiplier
   frames: array<vec4f, 256>,        // [2i] = (x, y, xAxis.x, xAxis.y)  [2i+1] = (yAxis.x, yAxis.y, frametime, 0)
   renderer: vec4f,                  // x: 渲染模式  y: length  z: maxlength  w: segments
+  blend: vec4f,                     // x: colorBlendMode（0 无 / 1-31 WE 编号）
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -43,6 +44,9 @@ struct SpriteUniform {
 @group(0) @binding(6) var<uniform> sprite: SpriteUniform;
 // ropetrail 历史环（渲染侧只读）
 @group(0) @binding(7) var<storage, read> trailHistory: array<vec4f>;
+
+// group 1：帧背景快照（colorBlendMode 合成用；无混合时绑 1×1 白）
+@group(1) @binding(0) var bgTex: texture_2d<f32>;
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -62,7 +66,115 @@ fn trailPoint(slot: u32, bin: u32, segs: u32, k: u32, head: vec3f) -> vec3f {
   return s.xyz;
 }
 
-@vertex
+
+// ---------- Photoshop 式混合（移植自 WE common_blending.h，A=背景 B=前景） ----------
+fn rgbToHsl(c: vec3f) -> vec3f {
+  let fmin = min(min(c.r, c.g), c.b);
+  let fmax = max(max(c.r, c.g), c.b);
+  let delta = fmax - fmin;
+  var hsl = vec3f(0.0, 0.0, (fmax + fmin) * 0.5);
+  if (delta > 0.0) {
+    hsl.y = select(delta / (2.0 - fmax - fmin), delta / (fmax + fmin), hsl.z < 0.5);
+    let deltaR = (((fmax - c.r) / 6.0) + (delta * 0.5)) / delta;
+    let deltaG = (((fmax - c.g) / 6.0) + (delta * 0.5)) / delta;
+    let deltaB = (((fmax - c.b) / 6.0) + (delta * 0.5)) / delta;
+    if (c.r == fmax) { hsl.x = deltaB - deltaG; }
+    else if (c.g == fmax) { hsl.x = (1.0 / 3.0) + deltaR - deltaB; }
+    else { hsl.x = (2.0 / 3.0) + deltaG - deltaR; }
+    if (hsl.x < 0.0) { hsl.x += 1.0; } else if (hsl.x > 1.0) { hsl.x -= 1.0; }
+  }
+
+  return hsl;
+}
+fn hueToRGB(f1: f32, f2: f32, hue_: f32) -> f32 {
+  var hue = hue_;
+  if (hue < 0.0) { hue += 1.0; } else if (hue > 1.0) { hue -= 1.0; }
+  if ((6.0 * hue) < 1.0) { return f1 + (f2 - f1) * 6.0 * hue; }
+  if ((2.0 * hue) < 1.0) { return f2; }
+  if ((3.0 * hue) < 2.0) { return f1 + (f2 - f1) * ((2.0 / 3.0) - hue) * 6.0; }
+
+  return f1;
+}
+fn hslToRGB(hsl: vec3f) -> vec3f {
+  if (hsl.y == 0.0) { return vec3f(hsl.z); }
+  let f2 = select((hsl.z + hsl.y) - (hsl.y * hsl.z), hsl.z * (1.0 + hsl.y), hsl.z < 0.5);
+  let f1 = 2.0 * hsl.z - f2;
+
+  return vec3f(hueToRGB(f1, f2, hsl.x + (1.0 / 3.0)), hueToRGB(f1, f2, hsl.x), hueToRGB(f1, f2, hsl.x - (1.0 / 3.0)));
+}
+fn blendOverlayf(base: f32, blend: f32) -> f32 {
+  return select(1.0 - 2.0 * (1.0 - base) * (1.0 - blend), 2.0 * base * blend, base < 0.5);
+}
+fn blendSoftLightf(base: f32, blend: f32) -> f32 {
+  return select(sqrt(base) * (2.0 * blend - 1.0) + 2.0 * base * (1.0 - blend),
+                2.0 * base * blend + base * base * (1.0 - 2.0 * blend), blend < 0.5);
+}
+fn blendColorDodgef(base: f32, blend: f32) -> f32 {
+  return select(min(base / max(1.0 - blend, 1e-4), 1.0), blend, blend == 1.0);
+}
+fn blendColorBurnf(base: f32, blend: f32) -> f32 {
+  return select(max(1.0 - ((1.0 - base) / max(blend, 1e-4)), 0.0), blend, blend == 0.0);
+}
+fn blendReflectf(base: f32, blend: f32) -> f32 {
+  return select(min(base * base / max(1.0 - blend, 1e-4), 1.0), blend, blend == 1.0);
+}
+// WGSL 无函数指针：每通道混合展开为 vec3 版本
+fn vOverlay(a: vec3f, b: vec3f) -> vec3f {
+  return vec3f(blendOverlayf(a.r, b.r), blendOverlayf(a.g, b.g), blendOverlayf(a.b, b.b));
+}
+fn vSoftLight(a: vec3f, b: vec3f) -> vec3f {
+  return vec3f(blendSoftLightf(a.r, b.r), blendSoftLightf(a.g, b.g), blendSoftLightf(a.b, b.b));
+}
+fn vColorDodge(a: vec3f, b: vec3f) -> vec3f {
+  return vec3f(blendColorDodgef(a.r, b.r), blendColorDodgef(a.g, b.g), blendColorDodgef(a.b, b.b));
+}
+fn vColorBurn(a: vec3f, b: vec3f) -> vec3f {
+  return vec3f(blendColorBurnf(a.r, b.r), blendColorBurnf(a.g, b.g), blendColorBurnf(a.b, b.b));
+}
+fn vReflect(a: vec3f, b: vec3f) -> vec3f {
+  return vec3f(blendReflectf(a.r, b.r), blendReflectf(a.g, b.g), blendReflectf(a.b, b.b));
+}
+
+/** WE ApplyBlending 的运行时分发（mode: 1-31，A=背景 B=前景，opacity 混合权重）。 */
+fn applyBlend(mode: u32, A: vec3f, B: vec3f, opacity: f32) -> vec3f {
+  var F = B;
+  switch mode {
+    case 1u { F = min(A, B); }
+    case 2u { F = A * B; }
+    case 3u { F = vColorBurn(A, B); }
+    case 4u, 20u { F = max(A + B - vec3f(1.0), vec3f(0.0)); }
+    case 5u { return min(A, B); }
+    case 6u { F = max(A, B); }
+    case 7u { F = vec3f(1.0) - (vec3f(1.0) - A) * (vec3f(1.0) - B); }
+    case 8u { F = vColorDodge(A, B); }
+    case 9u { F = min(A + B, vec3f(1.0)); }
+    case 10u { return max(A, B); }
+    case 11u { F = vOverlay(A, B); }
+    case 12u { F = vSoftLight(A, B); }
+    case 13u { F = vOverlay(B, A); }
+    case 14u { F = select(vColorDodge(A, 2.0 * (B - vec3f(0.5))), vColorBurn(A, B * 2.0), B < vec3f(0.5)); }
+    case 15u { F = select(min(A + 2.0 * (B - vec3f(0.5)), vec3f(1.0)), max(A + 2.0 * B - vec3f(1.0), vec3f(0.0)), B < vec3f(0.5)); }
+    case 16u { F = select(max(A, 2.0 * (B - vec3f(0.5))), min(A, 2.0 * B), B < vec3f(0.5)); }
+    case 17u { F = select(vec3f(1.0), vec3f(0.0), vColorBurn(A, B) + vColorDodge(A, B) < vec3f(0.5)); }
+    case 18u { F = abs(A - B); }
+    case 19u { F = A + B - 2.0 * A * B; }
+    case 21u { F = vReflect(A, B); }
+    case 22u { F = vReflect(B, A); }
+    case 23u { F = min(A, B) - max(A, B) + vec3f(1.0); }
+    case 24u { F = (A + B) * 0.5; }
+    case 25u { F = vec3f(1.0) - abs(vec3f(1.0) - A - B); }
+    case 26u { F = hslToRGB(vec3f(rgbToHsl(B).r, rgbToHsl(A).g, rgbToHsl(A).b)); }
+    case 27u { F = hslToRGB(vec3f(rgbToHsl(A).r, rgbToHsl(B).g, rgbToHsl(A).b)); }
+    case 28u { let bh = rgbToHsl(B); F = hslToRGB(vec3f(bh.r, bh.g, rgbToHsl(A).b)); }
+    case 29u { F = hslToRGB(vec3f(rgbToHsl(A).r, rgbToHsl(A).g, rgbToHsl(B).b)); }
+    case 30u { F = vec3f(max(A.r, max(A.g, A.b))) * B; }
+    case 31u { return A + B * opacity; }
+    default { return B; }
+  }
+
+  return mix(A, F, opacity);
+}
+\n@vertex
 fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
   // 两个三角形拼 quad（6 顶点，无索引缓冲）；mode 决定 quad 的世界空间含义
   var corners = array<vec2f, 6>(
@@ -165,6 +277,39 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4f {
   let t = textureSample(tex, samp, in.uv);
-  return vec4f(in.color.rgb * t.rgb, in.color.a * t.a);
+  var rgb = in.color.rgb * t.rgb;
+  let a = in.color.a * t.a;
+  let mode = u32(sprite.blend.x);
+  if (mode > 0u) {
+    // colorBlendMode：采样当前帧背景做 Photoshop 式合成（WE _rt_FullFrameBuffer 语义）
+    let bg = textureSample(bgTex, samp, in.pos.xy / vec2f(frame.resX, frame.resY)).rgb;
+    rgb = applyBlend(mode, bg, rgb, 1.0);
+  }
+
+  return vec4f(rgb, a);
+}
+`
+
+/** 全屏 blit（离屏场景 → 画布）。 */
+// prettier-ignore
+export const BLIT_WGSL = /* wgsl */ `
+@group(0) @binding(0) var srcTex: texture_2d<f32>;
+@group(0) @binding(1) var srcSamp: sampler;
+
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+  var corners = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  let c = corners[vi];
+  var o: VOut;
+  o.pos = vec4f(c, 0.0, 1.0);
+  o.uv = vec2f((c.x + 1.0) * 0.5, 1.0 - (c.y + 1.0) * 0.5);
+  return o;
+}
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4f {
+  return textureSample(srcTex, srcSamp, in.uv);
 }
 `
