@@ -130,10 +130,10 @@ fn gauss3(seq: u32, i: u32) -> vec3f {
   return vec3f(sinT * cos(phi), sinT * sin(phi), cosT);
 }
 
-/** WE ApplySign 的单分量版：s>0 取 |c|，s<0 取 -|c|，s=0 清零。 */
+/** WE ApplySign 的单分量版：0 保留原值（默认），±1 强制该分量符号。 */
 fn applySign1(c: f32, s: f32) -> f32 {
-  if (abs(s) < 1e-6) { return 0.0; }
-  return select(-abs(c), abs(c), s > 0.0);
+  if (s == 0.0) { return c; }
+  return abs(c) * s;
 }
 
 // ---------- 3D value noise + curl（turbulence 用） ----------
