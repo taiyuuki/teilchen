@@ -16,7 +16,7 @@ function onPreset(e: Event): void {
 async function onImportFile(e: Event): Promise<void> {
     const input = e.target as HTMLInputElement
     const file = input.files?.[0]
-    if (file) importWeJson(await file.text())
+    if (file) await importWeJson(await file.text())
     input.value = ''
 }
 

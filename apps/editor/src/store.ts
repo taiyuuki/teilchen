@@ -7,6 +7,7 @@ import { reactive, watch } from 'vue'
 import {
     type ModuleKind,
     type ParticleSystemDef,
+    attachChildDefs,
     cursorAvoidPreset,
     fountainPreset,
     galaxyPreset,
@@ -162,9 +163,29 @@ export function selectModule(kind: ModuleKind, index: number): void {
 
 // ---------------------------------------------------------------- WE JSON 导入导出
 
-export function importWeJson(text: string): void {
-    const { def, warnings } = parseWeParticleJson(text, undefined, 'imported')
+/** 导入 WE particle JSON（可选 material JSON 文本；children 引用尝试从 playground 资产路径解析）。 */
+export async function importWeJson(text: string, materialText?: string): Promise<void> {
+    const { def, warnings } = parseWeParticleJson(text, materialText ? JSON.parse(materialText) : undefined, 'imported')
     for (const w of warnings) pushWarning(`[import] ${w}`)
+    await attachChildDefs(def, async wePath => {
+        const base = wePath.split('/')
+            .pop()!
+        try {
+            const particleJson = await fetch(`/we/presets/${base}`).then(r => r.json())
+            const matFile = String(particleJson.material ?? '').split('/')
+                .pop()
+            const materialJson = matFile
+                ? await fetch(`/we/presets/materials/${matFile}`).then(r => r.ok ? r.json() : undefined)
+                : undefined
+            const sub = parseWeParticleJson(particleJson, materialJson, base.replace('.json', ''))
+            for (const w of sub.warnings) pushWarning(`[import:child] ${w}`)
+
+            return sub.def
+        }
+        catch {
+            return undefined
+        }
+    })
     loadDef(def)
 }
 

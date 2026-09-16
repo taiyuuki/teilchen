@@ -1,4 +1,4 @@
-import { PRESETS, type ParticleSystemDef, defaultSystem, parseWeParticleJson } from '@teilchen/core'
+import { PRESETS, type ParticleSystemDef, attachChildDefs, defaultSystem, parseWeParticleJson } from '@teilchen/core'
 import { ParticleRuntime, type TextureAsset, createTextureFromTex } from '@teilchen/runtime'
 
 const canvas = document.getElementById('view') as HTMLCanvasElement
@@ -17,13 +17,92 @@ window.addEventListener('unhandledrejection', e => warn(`Promise 拒绝: ${e.rea
 
 // ---------------------------------------------------------------- WE 官方样例导入
 
-async function weImport(file: string, name: string): Promise<ParticleSystemDef> {
+async function weImport(file: string, name: string, materialFile = 'halo.material.json'): Promise<ParticleSystemDef> {
     const [particleJson, materialJson] = await Promise.all([
         fetch(`/we/${file}`).then(r => r.json()),
-        fetch('/we/halo.material.json').then(r => r.json()),
+        fetch(`/we/${materialFile}`).then(r => r.json()),
     ])
     const { def, warnings: ws } = parseWeParticleJson(particleJson, materialJson, name)
     for (const w of ws) warn(`[${name}] ${w}`)
+
+    return def
+}
+
+// WE 内置预设（projects/myprojects/particles）：材质按引用 basename 从 materials/ 子目录配对
+// 子系统贴图（key = ChildDef.name）与根 def 关联，loadExample 时随 addSystem 传入
+const childTexByRoot = new WeakMap<ParticleSystemDef, Record<string, TextureAsset>>()
+
+async function wePresetImport(file: string): Promise<ParticleSystemDef> {
+    const def = await weLoadPreset(file)
+    await resolveChildDefs(def)
+    await attachChildTextures(def)
+
+    return def
+}
+
+/** 递归收集各层 children 的材质贴图（同路径共享一个 TextureAsset）。 */
+async function attachChildTextures(def: ParticleSystemDef): Promise<void> {
+    if (!def.children.length) return
+    const texByPath = new Map<string, TextureAsset>()
+    const collect = async(d: ParticleSystemDef, out: Record<string, TextureAsset>): Promise<void> => {
+        for (const child of d.children) {
+            if (!child.def) continue
+            const texPath = child.def.material.textures[0]
+            if (texPath) {
+                let asset = texByPath.get(texPath)
+                if (!asset) {
+                    const loaded = await loadTex(`/we/tex/${texPath}.tex`)
+                    if (loaded) {
+                        asset = loaded
+                        texByPath.set(texPath, asset)
+                    }
+                }
+                if (asset) out[child.name] = asset
+            }
+            await collect(child.def, out)
+        }
+    }
+    const out: Record<string, TextureAsset> = {}
+    await collect(def, out)
+    if (Object.keys(out).length) childTexByRoot.set(def, out)
+}
+
+async function weLoadPreset(file: string): Promise<ParticleSystemDef> {
+    const particleJson = await fetch(`/we/presets/${file}`).then(r => r.json())
+    const matFile = String(particleJson.material ?? '').split('/')
+        .pop()
+    const materialJson = matFile
+        ? await fetch(`/we/presets/materials/${matFile}`).then(r => r.ok ? r.json() : undefined)
+        : undefined
+    const { def, warnings: ws } = parseWeParticleJson(particleJson, materialJson, file.replace('.json', ''))
+    for (const w of ws) warn(`[${file}] ${w}`)
+
+    return def
+}
+
+/** children 递归解析走 core 的 attachChildDefs（child.name 取 basename，预设同目录）。 */
+async function resolveChildDefs(def: ParticleSystemDef): Promise<void> {
+    await attachChildDefs(def, async name => weLoadPreset(name.split('/').pop()!))
+}
+
+// 只列顶层效果；部件文件（被 children 引用的 flare/stars/swirl 等）不单独演示，仍会被递归加载
+const WE_PRESETS = [
+    'bubbles1', 'dna', 'dripping_water', 'ember_beams', 'fireflies', 'fireworks2', 'fog1',
+    'leaves5', 'lightning1', 'magic_color_sparkle', 'magic_glyphs_0', 'magic_vortex_orb',
+    'rainperspective', 'smoke1', 'snowflat', 'starfield', 'torch', 'trail_0', 'trail_1',
+    'trail_2', 'water_faucet', 'water_impact',
+] as const
+
+/** WE 场景里粒子对象可拖放到任意位置；烟花/喷泉类通常摆在画布下部（否则火箭冲出顶部）。 */
+function placeAtBottom(def: ParticleSystemDef, canvas: HTMLCanvasElement): ParticleSystemDef {
+
+    // 发射位置由 emitter.origin 决定（def.origin 只影响控制点/gizmo 基准）
+    const dy = -canvas.clientHeight * 0.38
+    for (const em of def.emitters) {
+        const o = em.origin as [number, number, number] | undefined ?? [0, 0, 0]
+        em.origin = [o[0], o[1] + dy, o[2]]
+    }
+    def.origin[1] = dy
 
     return def
 }
@@ -43,11 +122,15 @@ interface Example {
 const EXAMPLES: Example[] = [
     ...PRESETS.map((p): Example => ({ id: p.id, label: p.label, load: p.load })),
     { id: 'we-example', label: 'WE example.json（导入）', load: () => weImport('example.json', 'we-example') },
+    { id: 'we-example3d', label: 'WE example3d.json（导入）', load: () => weImport('example3d.json', 'we-example3d', 'halo_translucent.json') },
+    { id: 'we-cursoravoid', label: 'WE examplecursoravoid.json（鼠标避开）', load: () => weImport('examplecursoravoid.json', 'we-cursoravoid') },
+    { id: 'we-cursorfollow', label: 'WE examplecursorfollow.json（鼠标跟随）', load: () => weImport('examplecursorfollow.json', 'we-cursorfollow') },
     {
         id:    'we-turbolence',
         label: 'WE exampleturbolence.json（15k rate 压测）',
         load:  () => weImport('exampleturbolence.json', 'we-turbolence'),
     },
+    { id: 'we-turbolence3d', label: 'WE exampleturbolence3d.json（导入）', load: () => weImport('exampleturbolence3d.json', 'we-turbolence3d', 'halo_translucent.json') },
     {
         id:     'we-tex-sprite',
         label:  'WE fish1.tex（.tex 解码 + sprite sequence 动画）',
@@ -134,8 +217,19 @@ async function main(): Promise<void> {
         const ex = EXAMPLES.find(e => e.id === id) ?? EXAMPLES[0]
         const result = await ex.load()
         const defs = Array.isArray(result) ? result : [result]
-        const asset = ex.asset ? await ex.asset() : null
-        for (const def of defs) currentHandles.push(runtime.addSystem(def, asset ? { texture: asset } : {}))
+        const asset = ex.asset ? await ex.asset() : await texFromMaterial(defs)
+        for (const def of defs) {
+            const childTextures = childTexByRoot.get(def)
+            currentHandles.push(runtime.addSystem(def, { ...asset ? { texture: asset } : {}, ...childTextures ? { childTextures } : {} }))
+        }
+    }
+
+    /** 材质里第一个贴图路径（如 "particle/fire/fire1"）→ /we/tex/<path>.tex 解码。 */
+    async function texFromMaterial(defs: ParticleSystemDef[]): Promise<TextureAsset | null> {
+        const texPath = defs.map(d => d.material.textures[0]).find(Boolean)
+        if (!texPath) return null
+
+        return loadTex(`/we/tex/${texPath}.tex`)
     }
 
     for (const ex of EXAMPLES) {
@@ -144,6 +238,28 @@ async function main(): Promise<void> {
         opt.textContent = ex.label
         selectEl.appendChild(opt)
     }
+    {
+        const group = document.createElement('optgroup')
+        group.label = 'WE 内置预设（34）'
+        for (const p of WE_PRESETS) {
+            const opt = document.createElement('option')
+            opt.value = `preset:${p}`
+            opt.textContent = p
+            group.appendChild(opt)
+        }
+        selectEl.appendChild(group)
+    }
+
+    // preset:<name> 统一走 wePresetImport（须在 change 监听注册前就位）
+    EXAMPLES.push(...WE_PRESETS.map(p => ({
+        id:    `preset:${p}`,
+        label: p,
+        load:  async() => {
+            const def = await wePresetImport(`${p}.json`)
+
+            return p === 'fireworks2' ? placeAtBottom(def, canvas) : def
+        },
+    })))
     selectEl.addEventListener('change', () => void loadExample(selectEl.value))
     await loadExample('fountain')
     runtime.start()
