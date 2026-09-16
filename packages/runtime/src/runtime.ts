@@ -4,14 +4,21 @@
  * 模拟完全在 compute shader 中进行（free-list 槽位分配 + 原子计数），
  * CPU 侧零回读；渲染走 indirect instanced billboard，实例数由 GPU 写出。
  */
-import type { ParticleSystemDef } from '@teilchen/core'
-import { compileProgram } from './compile.ts'
+import type { ChildDef, ParticleSystemDef, SpawnType } from '@teilchen/core'
+import { burstLifetime, compileChildren, compileProgram } from './compile.ts'
 import type { SpriteFrame } from './tex.ts'
 import {
+    CHILDREN_OFFSET,
+    COUNTS_OFFSET,
+    ChildType,
     FRAME_UNIFORM_SIZE,
     INDIRECT_SIZE,
+    INSTANCE_SPAWN_THREADS,
     MAX_CAPACITY,
+    MAX_CHILDREN,
+    MAX_EVENTS,
     MAX_SPRITE_FRAMES,
+    MAX_WORKGROUPS_FOR_EVENTS,
     PROGRAM_BUFFER_SIZE,
     SPAWN_WORKGROUPS,
     SPRITE_UNIFORM_SIZE,
@@ -68,6 +75,24 @@ export interface SystemHandle {
     destroy(): void
 }
 
+interface ChildRole {
+
+    /** 父系统 res（借用其实例/事件缓冲）。 */
+    parent: SystemRes
+
+    /** WE 类型码（ChildType）。 */
+    type:    number
+    cpStart: number
+
+    /** 在父合并实例缓冲里的区域起点（元素下标）。 */
+    instanceBase: number
+
+    /** 区域容量（follow = 父容量；death/spawn = childDef.maxCount）。 */
+    instanceCap: number
+    lifetime:    number
+    probability: number
+}
+
 interface SystemRes {
     handle:         SystemHandle
     def:            ParticleSystemDef
@@ -90,6 +115,15 @@ interface SystemRes {
     pipelineRender: GPURenderPipeline
     textureView:    GPUTextureView
     sampler:        GPUSampler
+
+    // ---- children（父持有合并实例/事件缓冲；子借用） ----
+    role:         ChildRole | null
+    children:     SystemRes[]
+    childrenSig:  string
+    instances:    GPUBuffer | null
+    events:       GPUBuffer | null
+    instanceFree: GPUBuffer | null
+    burstCap:     number
 }
 
 export class ParticleRuntime {
@@ -103,11 +137,15 @@ export class ParticleRuntime {
     private readonly frameUniform:  GPUBuffer
     private readonly computeModule: GPUShaderModule
     private readonly pipelines: {
-        prepare:  GPUComputePipeline;
-        spawn:    GPUComputePipeline;
-        simulate: GPUComputePipeline;
-        finalize: GPUComputePipeline;
+        prepare:       GPUComputePipeline;
+        spawn:         GPUComputePipeline;
+        simulate:      GPUComputePipeline;
+        finalize:      GPUComputePipeline;
+        childInstance: GPUComputePipeline;
+        childEvent:    GPUComputePipeline;
+        childSpawn:    GPUComputePipeline;
     }
+    private readonly dummyStorages:      GPUBuffer[]
     private readonly bglCompute:         GPUBindGroupLayout
     private readonly renderPipelines:    Map<string, GPURenderPipeline>
     private readonly defaultTextureView: GPUTextureView
@@ -152,17 +190,25 @@ export class ParticleRuntime {
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
                 { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
             ],
         })
         const computeLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bglCompute] })
         const mk = (entryPoint: string) =>
             device.createComputePipeline({ layout: computeLayout, compute: { module: this.computeModule, entryPoint } })
         this.pipelines = {
-            prepare:  mk('prepareMain'),
-            spawn:    mk('spawnMain'),
-            simulate: mk('simulateMain'),
-            finalize: mk('finalizeMain'),
+            prepare:       mk('prepareMain'),
+            spawn:         mk('spawnMain'),
+            simulate:      mk('simulateMain'),
+            finalize:      mk('finalizeMain'),
+            childInstance: mk('childInstanceMain'),
+            childEvent:    mk('childEventMain'),
+            childSpawn:    mk('childSpawnMain'),
         }
+        this.dummyStorages = Array.from({ length: 4 }, () => device.createBuffer({ size: 128, usage: GPUBufferUsage.STORAGE }))
 
         // render
         const billboardModule = device.createShaderModule({ code: BILLBOARD_WGSL, label: 'billboard' })
@@ -223,7 +269,10 @@ export class ParticleRuntime {
         if (!navigator.gpu) throw new Error('此浏览器不支持 WebGPU（需要 Chrome 113+ / Safari 26+）')
         const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
         if (!adapter) throw new Error('无法获取 WebGPU adapter')
-        const device = opts.device ?? await adapter.requestDevice()
+
+        // compute shader 需要 9 个 storage binding（粒子/程序表/自由列表/渲染索引/indirect
+        // + 实例/事件/实例自由列表），超过默认限制 8，按 adapter 上限申请
+        const device = opts.device ?? await adapter.requestDevice({ requiredLimits: { maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage } })
         const ctx = opts.canvas.getContext('webgpu')
         if (!ctx) throw new Error('无法获取 webgpu canvas context')
         const format = navigator.gpu.getPreferredCanvasFormat()
@@ -235,6 +284,20 @@ export class ParticleRuntime {
     // ---------------------------------------------------------------- systems
 
     addSystem(def: ParticleSystemDef, opts: AddSystemOptions = {}): SystemHandle {
+        const res = this.createSystem(def, opts, null)
+        this.wireChildren(res, def)
+
+        // warmup（starttime：以 1/60s 预跑，GPU 空转不渲染；子系统的 warmup 暂不含）
+        if (def.startTime > 0) {
+            if (res.children.length) this.onWarning(`[${def.name}] startTime 预热暂不包含子系统`)
+            this.warmup(res)
+        }
+
+        return res.handle
+    }
+
+    /** 创建一个系统（root 或子）。static 子系统按普通系统创建（无父子接线）。 */
+    private createSystem(def: ParticleSystemDef, opts: AddSystemOptions, role: ChildRole | null): SystemRes {
         const device = this.device
         const capacity = Math.min(MAX_CAPACITY, Math.max(1, Math.round(def.maxCount)))
 
@@ -249,6 +312,18 @@ export class ParticleRuntime {
         const sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         const spriteUniform = device.createBuffer({ size: SPRITE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         const indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
+
+        // 父持有合并实例缓冲 + 事件缓冲；子持有爆发实例自由列表
+        const instances: GPUBuffer | null = null
+        const events: GPUBuffer | null = null
+        let instanceFree: GPUBuffer | null = null
+        let burstCap = 0
+        if (role) {
+            if (role.type !== ChildType.EventFollow) {
+                burstCap = role.instanceCap
+                instanceFree = device.createBuffer({ size: Math.max(4, burstCap) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            }
+        }
 
         const tex = this.resolveTexture(opts)
         const res: SystemRes = {
@@ -273,6 +348,13 @@ export class ParticleRuntime {
             pipelineRender: this.renderPipelines.get(def.material.blending) ?? this.renderPipelines.get('additive')!,
             textureView:    tex.view,
             sampler:        opts.sampler ?? tex.sampler ?? this.defaultSampler,
+            role,
+            children:       [],
+            childrenSig:    '',
+            instances,
+            events,
+            instanceFree,
+            burstCap,
         }
         res.handle = {
             id:                        this.nextId++,
@@ -288,10 +370,99 @@ export class ParticleRuntime {
         this.initAliveState(res)
         this.systems.push(res)
 
-        // warmup（starttime：以 1/60s 预跑，GPU 空转不渲染）
-        if (def.startTime > 0) this.warmup(res)
+        return res
+    }
 
-        return res.handle
+    /** 为父系统接线 children：分配实例区域、创建子系统（按声明顺序入列，保证 dispatch/渲染序）。 */
+    private wireChildren(res: SystemRes, def: ParticleSystemDef): void {
+        const device = this.device
+        const eventChildren = def.children.filter(c => c.def && c.type !== 'static').slice(0, 4)
+        let base = 0
+        const regions: Array<{ child: ChildDef, base: number, cap: number }> = []
+        for (const child of eventChildren) {
+            const cap = child.type === 'eventfollow'
+                ? res.capacity
+                : Math.max(1, Math.trunc(child.maxCount) || 32)
+            regions.push({ child, base, cap })
+            base += cap
+        }
+        res.childrenSig = childrenSignature(def, res.capacity)
+
+        // 父缓冲：合并实例 + 事件
+        res.instances?.destroy()
+        res.events?.destroy()
+        res.instances = base > 0
+            ? device.createBuffer({ size: base * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            : null
+        res.events = device.createBuffer({ size: MAX_EVENTS * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+
+        // 写父侧 children 描述表 + childMeta
+        const compiledChildren = compileChildren(def)
+        for (const w of compiledChildren.warnings) this.onWarning(`[${def.name}] ${w}`)
+        const table = new Uint32Array(new ArrayBuffer(MAX_CHILDREN * 32 + 32))
+        regions.forEach((r, i) => {
+            const code = CHILD_TYPE_CODE[r.child.type]
+            table[i * 8 + 0] = code
+            table[i * 8 + 1] = Math.max(0, Math.trunc(r.child.controlPointStartIndex))
+            table[i * 8 + 2] = 1
+            table[i * 8 + 3] = Math.round(Math.min(1, Math.max(0, r.child.probability || 1)) * 1000)
+            table[i * 8 + 4] = r.base
+            table[i * 8 + 5] = r.cap
+        })
+        table[MAX_CHILDREN * 8 + 0] = 0
+        table[MAX_CHILDREN * 8 + 1] = regions.length
+        device.queue.writeBuffer(res.program, CHILDREN_OFFSET, table)
+
+        // 父 bindgroup 需要新缓冲 → 重建
+        this.makeBindGroups(res)
+
+        // 创建子系统（static 也记入 children 列表便于整体重建/移除）
+        for (const child of def.children) {
+            if (!child.def) continue
+            if (child.type === 'static') {
+                res.children.push(this.createSystem(child.def, {}, null))
+                continue
+            }
+            const region = regions.find(r => r.child === child)
+            if (!region) continue
+            const role: ChildRole = {
+                parent:          res,
+                type:            CHILD_TYPE_CODE[child.type],
+                cpStart:         Math.max(0, Math.trunc(child.controlPointStartIndex)),
+                instanceBase:    region.base,
+                instanceCap:     region.cap,
+                lifetime:        burstLifetime(child.def),
+                probability:     Math.min(1, Math.max(0, child.probability || 1)),
+            }
+            const childRes = this.createSystem(child.def, {}, role)
+
+            // 子系统 childMeta：A=(1,myType,cpStart,base) B=(lifetime,cap,prob,0)
+            const meta = new Uint32Array(new ArrayBuffer(32))
+            const metaF = new Float32Array(meta.buffer)
+            meta[0] = 1
+            meta[1] = role.type
+            meta[2] = role.cpStart
+            meta[3] = role.instanceBase
+            metaF[4] = role.lifetime
+            metaF[5] = role.instanceCap
+            metaF[6] = role.probability
+            device.queue.writeBuffer(childRes.program, CHILDREN_OFFSET + MAX_CHILDREN * 32, meta)
+            this.makeBindGroups(childRes)
+            if (childRes.instanceFree && role.type !== ChildType.EventFollow) {
+                this.initInstanceFree(childRes)
+            }
+            res.children.push(childRes)
+        }
+    }
+
+    private initInstanceFree(res: SystemRes): void {
+        if (!res.instanceFree) return
+        const free = new Uint32Array(Math.max(4, res.burstCap))
+        for (let i = 0; i < res.burstCap; i++) free[i] = i
+        this.device.queue.writeBuffer(res.instanceFree, 0, free)
+        const counters = new Uint32Array(SYS_BUFFER_SIZE / 4)
+        counters[21] = res.burstCap // instFreeCount（偏移 84）
+        this.device.queue.writeBuffer(res.sys, 84, counters, 21, 1)
     }
 
     private updateSystem(
@@ -302,6 +473,16 @@ export class ParticleRuntime {
         const capacity = Math.min(MAX_CAPACITY, Math.max(1, Math.round(def.maxCount)))
         const compiled = compileProgram(def)
         for (const w of compiled.warnings) this.onWarning(`[${def.name}] ${w}`)
+
+        // children 结构变化 → 整体重建子系统（事件缓冲/实例区域随之重排）
+        if (!res.role) {
+            const sig = childrenSignature(def, capacity)
+            if (sig !== res.childrenSig) {
+                for (const c of [...res.children]) this.removeSystem(c.handle.id)
+                res.children = []
+                this.wireChildren(res, def)
+            }
+        }
 
         const tex = opts.texture === undefined ? null : this.resolveTexture(opts)
         if (capacity === res.capacity) {
@@ -393,11 +574,21 @@ export class ParticleRuntime {
 
     private writeProgramBuffer(res: SystemRes, compiled: { data: Uint8Array }, capacity: number): void {
         const progData = new Uint8Array(compiled.data)
-        new Uint32Array(progData.buffer, PROGRAM_BUFFER_SIZE - 16, 4)[3] = capacity // counts.w
-        this.device.queue.writeBuffer(res.program, 0, progData)
+        new Uint32Array(progData.buffer, COUNTS_OFFSET + 12, 4)[0] = capacity // counts.w
+        // 只写 children 表之前的部分（尾部由 wireChildren 维护）
+        this.device.queue.writeBuffer(res.program, 0, progData.buffer, 0, CHILDREN_OFFSET)
     }
 
     private makeBindGroups(res: SystemRes): void {
+
+        // 父：own instances/events + dummy free；子：父的 instances/events + own instanceFree
+        const instancesBuf = res.role ? res.role.parent.instances : res.instances
+        const eventsBuf = res.role ? res.role.parent.events : res.events
+        const freeBuf = res.instanceFree ?? this.dummyStorages[0]
+
+        // 父不能在 2/11 重复绑自己的 sys（可写别名冲突），父的 pass 不读 eventSys
+        // 父的 pass 不读 eventSys；绑 dummy 避免与 binding 2 的 sys 可写别名
+        const eventSysBuf = res.role ? res.role.parent.sys : this.dummyStorages[3]
         res.bgCompute = this.device.createBindGroup({
             layout:  this.bglCompute,
             entries: [
@@ -409,6 +600,10 @@ export class ParticleRuntime {
                 { binding: 5, resource: { buffer: res.freeList } },
                 { binding: 6, resource: { buffer: res.renderIndices } },
                 { binding: 7, resource: { buffer: res.indirect } },
+                { binding: 8, resource: { buffer: instancesBuf ?? this.dummyStorages[1] } },
+                { binding: 9, resource: { buffer: eventsBuf ?? this.dummyStorages[2] } },
+                { binding: 10, resource: { buffer: freeBuf } },
+                { binding: 11, resource: { buffer: eventSysBuf } },
             ],
         })
         const bglRender = this.renderPipelines.get('additive')!.getBindGroupLayout(0)
@@ -453,7 +648,10 @@ export class ParticleRuntime {
         const idx = this.systems.findIndex(s => s.handle.id === id)
         if (idx < 0) return
         const s = this.systems[idx]
-        for (const b of [s.program, s.particles, s.sys, s.freeList, s.renderIndices, s.sysUniform, s.spriteUniform, s.indirect, s.statsStaging]) b?.destroy()
+
+        // 先递归移除子系统（子借用父的缓冲，不能先销毁）
+        for (const c of [...s.children]) this.removeSystem(c.handle.id)
+        for (const b of [s.program, s.particles, s.sys, s.freeList, s.renderIndices, s.sysUniform, s.spriteUniform, s.indirect, s.instances, s.events, s.instanceFree, s.statsStaging]) b?.destroy()
         this.systems.splice(idx, 1)
     }
 
@@ -462,6 +660,16 @@ export class ParticleRuntime {
         this.simTime = 0
         for (const s of this.systems) {
             this.initAliveState(s, true)
+            if (s.role && s.instanceFree) this.initInstanceFree(s)
+            if (s.instances) {
+                const zeros = new Uint32Array(256 * 1024)
+                const total = s.instances.size
+                for (let off = 0; off < total; off += zeros.byteLength) {
+                    const n = Math.min(zeros.byteLength, total - off)
+                    this.device.queue.writeBuffer(s.instances, off, zeros.buffer, 0, n)
+                }
+            }
+            if (s.events) this.device.queue.writeBuffer(s.events, 0, new Uint32Array(64))
             if (s.handle.def.startTime > 0) this.warmup(s)
         }
     }
@@ -582,8 +790,21 @@ export class ParticleRuntime {
         pass.setBindGroup(0, s.bgCompute)
         pass.setPipeline(this.pipelines.prepare)
         pass.dispatchWorkgroups(1)
-        pass.setPipeline(this.pipelines.spawn)
-        pass.dispatchWorkgroups(SPAWN_WORKGROUPS)
+        if (s.role) {
+
+            // 子系统：实例老化 → 父事件分配 → 每实例发射 → 模拟
+            const instanceWg = Math.ceil(s.role.instanceCap / WORKGROUP_SIZE)
+            pass.setPipeline(this.pipelines.childInstance)
+            pass.dispatchWorkgroups(instanceWg)
+            pass.setPipeline(this.pipelines.childEvent)
+            pass.dispatchWorkgroups(MAX_WORKGROUPS_FOR_EVENTS)
+            pass.setPipeline(this.pipelines.childSpawn)
+            pass.dispatchWorkgroups(Math.ceil(s.role.instanceCap * INSTANCE_SPAWN_THREADS / WORKGROUP_SIZE))
+        }
+        else {
+            pass.setPipeline(this.pipelines.spawn)
+            pass.dispatchWorkgroups(SPAWN_WORKGROUPS)
+        }
         pass.setPipeline(this.pipelines.simulate)
         pass.dispatchWorkgroups(Math.ceil(capacity / WORKGROUP_SIZE))
         pass.setPipeline(this.pipelines.finalize)
@@ -673,4 +894,20 @@ export class ParticleRuntime {
         window.removeEventListener('resize', this.resize)
         for (const s of [...this.systems]) this.removeSystem(s.handle.id)
     }
+}
+
+/** WE SpawnType → GPU 类型码。 */
+const CHILD_TYPE_CODE: Record<SpawnType, number> = {
+    static:      ChildType.Static,
+    eventdeath:  ChildType.EventDeath,
+    eventspawn:  ChildType.EventSpawn,
+    eventfollow: ChildType.EventFollow,
+}
+
+/** children 结构签名：变化时触发子系统重建。 */
+function childrenSignature(def: ParticleSystemDef, capacity: number): string {
+    return JSON.stringify([
+        capacity,
+        def.children.map(c => [c.name, c.type, c.maxCount, c.controlPointStartIndex, c.probability]),
+    ])
 }

@@ -65,7 +65,10 @@ pnpm typecheck
 
 - [x] Phase 3：Editor MVP（Vue 3）—— 注册表驱动的属性面板、controlpoint gizmo、时间轴、热编辑 ✓
 - [ ] Editor 打磨：模块拖拽排序、撤销/重做、参数曲线、多系统场景面板
+- [x] children 子粒子系统 ✓ —— static（独立子系统）/ eventdeath / eventspawn（事件缓冲 + 爆发实例池，
+      GPU CAS 分配、按寿命过期）/ eventfollow（实例槽位与父粒子 1:1 直映，逐帧跟随）；
+      子实例驱动子发射器（instantaneous 出生爆发 / rate 按实例 age 结转），
+      子系统 controlpoint[cpStart] 替换为所属实例位置（vortex/attract 类算子可用）
 - [ ] rope/ropetrail/spritetrail 渲染器（GPU 排序或索引回读）
-- [ ] children 子粒子系统（eventfollow/eventspawn/eventdeath）
-- [ ] `.tex`（LZ4+BC）解码、sprite sheet 动画、31 种 colorBlendMode shader 化
+- [ ] 31 种 colorBlendMode shader 化（`.tex` 解码与 sprite sheet 动画已完成 ✓）
 - [ ] 音频响应（FFT → uniform）、场景多层合成、pkg 容器读取、导出独立 HTML

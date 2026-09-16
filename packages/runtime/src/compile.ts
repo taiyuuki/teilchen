@@ -5,6 +5,7 @@
 import type { ParticleModule, ParticleSystemDef, Vec3 } from '@teilchen/core'
 import { getModuleSpec, normalizeModule } from '@teilchen/core'
 import {
+    CHILDREN_OFFSET,
     COUNTS_OFFSET,
     EMITTERS_OFFSET,
     EMITTER_STRIDE,
@@ -12,6 +13,7 @@ import {
     INITIALIZERS_OFFSET,
     INITIALIZER_STRIDE,
     InitializerKind,
+    MAX_CHILDREN,
     MAX_EMITTERS,
     MAX_INITIALIZERS,
     MAX_OPERATORS,
@@ -230,6 +232,68 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
     u32[COUNTS_OFFSET / 4 + 3] = 0 // capacity 由运行时填
 
     return { data, emitterCount, initializerCount, operatorCount, warnings }
+}
+
+const CHILD_TYPE_CODES = { static: 0, eventdeath: 1, eventspawn: 2, eventfollow: 3 } as const
+
+export interface CompiledChildren {
+    data:     Uint8Array
+    count:    number
+    warnings: string[]
+}
+
+/**
+ * 编译父侧 children 描述表（写入 program buffer 尾部）。
+ * 每项 vec4u = (type, cpStart, active, probability)。
+ * static 子系统不进表（由运行时作为兄弟系统独立创建）。
+ */
+export function compileChildren(parentDef: ParticleSystemDef): CompiledChildren {
+    const warnings: string[] = []
+    const data = new Uint8Array(PROGRAM_BUFFER_SIZE - CHILDREN_OFFSET)
+    const u32 = new Uint32Array(data.buffer)
+    const f32 = new Float32Array(data.buffer)
+
+    let count = 0
+    for (const child of parentDef.children) {
+        if (count >= MAX_CHILDREN) {
+            warnings.push(`children 超过 ${MAX_CHILDREN} 个，多余的被忽略`)
+            break
+        }
+        if (!child.def) {
+            warnings.push(`child "${child.name}" 未解析子定义，已跳过`)
+            continue
+        }
+        if (child.def.children.some(c => c.type !== 'static')) {
+            warnings.push(`child "${child.name}"：嵌套 event 子系统暂不支持`)
+        }
+        const type = CHILD_TYPE_CODES[child.type] ?? 0
+        const o = count * 4
+        u32[o + 0] = type
+        u32[o + 1] = Math.max(0, Math.trunc(child.controlPointStartIndex))
+        u32[o + 2] = 1
+        f32[o + 3] = Math.min(1, Math.max(0, child.probability || 1))
+        count++
+    }
+
+    return { data, count, warnings }
+}
+
+/** 爆发实例的寿命：子定义里最长 lifetime + 发射窗口，CPU 常量近似。 */
+export function burstLifetime(def: ParticleSystemDef): number {
+    let maxLife = 1
+    for (const ini of def.initializers) {
+        if (ini.name === 'lifetimerandom') {
+            const p = ini as Record<string, unknown>
+            maxLife = Math.max(maxLife, typeof p.max === 'number' ? p.max : 1)
+        }
+    }
+    let duration = 0
+    for (const em of def.emitters) {
+        const p = em as Record<string, unknown>
+        if (typeof p.duration === 'number') duration = Math.max(duration, p.duration)
+    }
+
+    return maxLife + duration + 0.25
 }
 
 function norm(kind: 'emitter' | 'initializer' | 'operator', mod: ParticleModule, warnings: string[]): Params {

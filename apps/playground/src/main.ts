@@ -173,7 +173,7 @@ async function main(): Promise<void> {
     }, 250)
 
     // 调试/自动化句柄（页面隐藏时 RAF 停转，可用 step() 同步步进）
-    Object.assign(window, { __teilchen: { runtime } })
+    Object.assign(window, { __teilchen: { runtime, warnings } })
 }
 
 main().catch(err => {

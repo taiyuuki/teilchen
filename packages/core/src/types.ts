@@ -41,14 +41,19 @@ export interface ControlPointDef {
 export type SpawnType = 'eventdeath' | 'eventfollow' | 'eventspawn' | 'static'
 
 export interface ChildDef {
-    name:                   string;
-    type:                   SpawnType;
+    name: string;
+    type: SpawnType;
+
+    /** 实例数上限（event 类）；static 忽略。 */
     maxCount:               number;
     controlPointStartIndex: number;
     probability:            number;
     origin:                 Vec3;
     scale:                  Vec3;
     angles:                 Vec3;
+
+    /** 加载器解析 name 后填充的子系统定义（不参与 WE JSON 序列化）。 */
+    def?: ParticleSystemDef;
 }
 
 export type RendererKind = 'rope' | 'ropetrail' | 'sprite' | 'spritetrail'

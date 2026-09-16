@@ -6,6 +6,7 @@
 export const MAX_EMITTERS = 4
 export const MAX_INITIALIZERS = 16
 export const MAX_OPERATORS = 16
+export const MAX_CHILDREN = 4
 
 /** 每帧 spawn 线程上限（工作 组数 × 64）。覆盖 rate ≤ 6 万/秒 @60fps。 */
 export const SPAWN_WORKGROUPS = 16
@@ -25,13 +26,17 @@ export const EMITTERS_OFFSET = 0
 export const INITIALIZERS_OFFSET = EMITTERS_OFFSET + MAX_EMITTERS * EMITTER_STRIDE // 448
 export const OPERATORS_OFFSET = INITIALIZERS_OFFSET + MAX_INITIALIZERS * INITIALIZER_STRIDE // 1216
 export const COUNTS_OFFSET = OPERATORS_OFFSET + MAX_OPERATORS * OPERATOR_STRIDE // 3008
-export const PROGRAM_BUFFER_SIZE = COUNTS_OFFSET + 16 // 3024
+// children 描述表（4×vec4u）+ childMeta（count/isChild/instanceCap/burstCap）
+export const CHILDREN_OFFSET = COUNTS_OFFSET + 16 // 3024
+/** 父侧 children 描述表（每 child 2×vec4u）+ 子侧元数据（2×vec4）。 */
+export const CHILD_META_OFFSET = CHILDREN_OFFSET + MAX_CHILDREN * 32 // 3152
+export const PROGRAM_BUFFER_SIZE = CHILD_META_OFFSET + 32 // 3184
 
-// ---- 计数器（sysBuffer，原子区；4 atomic + 3×vec4 + 1×vec4 padding = 80B） ----
-export const SYS_BUFFER_SIZE = 80
+// ---- 计数器（sysBuffer，原子区；80B 基础 + eventCount/instFreeCount = 96B） ----
+export const SYS_BUFFER_SIZE = 96
 
-// ---- 每系统 uniform（每帧更新：origin/pointer/controlpoints） ----
-export const SYS_UNIFORM_SIZE = 16 + 16 + 8 * 16 // 160
+// ---- 每系统 uniform（每帧更新：origin/pointer/controlpoints + mode） ----
+export const SYS_UNIFORM_SIZE = 16 + 16 + 8 * 16 + 16 // 176
 
 // ---- Frame uniform（全局） ----
 export const FRAME_UNIFORM_SIZE = 16 // time, dt, resX, resY
@@ -41,6 +46,22 @@ export const INDIRECT_SIZE = 16 // vertexCount, instanceCount, firstVertex, firs
 
 /** 粒子容量上限（128B/粒子 × 500k = 64MB，低于默认 maxStorageBufferBindingSize）。 */
 export const MAX_CAPACITY = 500_000
+
+// ---- children（父子粒子系统） ----
+/** 每系统事件缓冲容量（父粒子 spawn/death 事件）。 */
+export const MAX_EVENTS = 4096
+
+/** ChildInstance 32B：posAge vec4f + meta vec4u + emitted vec4u。 */
+export const INSTANCE_STRIDE = 32
+
+/** 每实例每帧发射线程预算。 */
+export const INSTANCE_SPAWN_THREADS = 64
+
+/** 事件处理 pass 的工作组数（MAX_EVENTS / 64）。 */
+export const MAX_WORKGROUPS_FOR_EVENTS = MAX_EVENTS / 64
+
+/** 实例槽位无效标记。 */
+export const INSTANCE_INVALID = 0xffffffff
 
 // ---- sprite 动画 uniform（render 侧） ----
 export const MAX_SPRITE_FRAMES = 128
@@ -75,3 +96,6 @@ export const OperatorKind = {
     Vortex:              10,
     ControlPointAttract: 11,
 } as const
+
+/** 子粒子系统类型（与 WGSL/ChildDesc 一致）。 */
+export const ChildType = { Static: 0, EventDeath: 1, EventSpawn: 2, EventFollow: 3 } as const

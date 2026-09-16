@@ -155,9 +155,82 @@ export function cursorAvoidPreset(): ParticleSystemDef {
     return def
 }
 
+export function fireworksPreset(): ParticleSystemDef {
+
+    // 父：上升的火箭拖尾；eventdeath 子：死亡点爆开的火花
+    const def = defaultSystem('fireworks')
+    def.material.blending = 'additive'
+    def.maxCount = 2000
+    def.emitters = [
+        {
+            name:        'boxrandom',
+            rate:        2,
+            origin:      [0, -420, 0],
+            directions:  [1, 1, 0],
+            distancemin: [-30, 0, 0],
+            distancemax: [30, 10, 0],
+            speedmin:    0,
+            speedmax:    0,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 1.4, max: 1.9 },
+        { name: 'sizerandom', min: 3, max: 7 },
+        { name: 'velocityrandom', min: [-40, 520, 0], max: [40, 680, 0] },
+        { name: 'colorrandom', min: [255, 220, 160], max: [255, 250, 230] },
+    ]
+    def.operators = [
+        { name: 'movement', gravity: [0, -180, 0], drag: 0.15 },
+        { name: 'alphafade', fadeintime: 0.05, fadeouttime: 0.3 },
+    ]
+
+    const child = defaultSystem('fireworks-burst')
+    child.material.blending = 'additive'
+    child.maxCount = 8000
+    child.emitters = [
+        {
+            name:          'sphererandom',
+            rate:          0,
+            origin:        [0, 0, 0],
+            directions:    [1, 1, 0],
+            distancemin:   0,
+            distancemax:   0,
+            speedmin:      90,
+            speedmax:      320,
+            instantaneous: 180,
+        },
+    ]
+    child.initializers = [
+        { name: 'lifetimerandom', min: 0.7, max: 1.5 },
+        { name: 'sizerandom', min: 3, max: 8 },
+        { name: 'colorrandom', min: [255, 240, 200], max: [255, 170, 80] },
+    ]
+    child.operators = [
+        { name: 'movement', gravity: [0, -70, 0], drag: 1.1 },
+        { name: 'alphafade', fadeintime: 0.03, fadeouttime: 0.6 },
+        { name: 'colorchange', starttime: 0.2, endtime: 1.2, startvalue: [1, 0.95, 0.8], endvalue: [1, 0.35, 0.1] },
+    ]
+    def.children = [
+        {
+            name:                   'particles/fireworks-burst.json',
+            type:                   'eventdeath',
+            maxCount:               32,
+            controlPointStartIndex: 0,
+            probability:            1,
+            origin:                 [0, 0, 0],
+            scale:                  [1, 1, 1],
+            angles:                 [0, 0, 0],
+            def:                    child,
+        },
+    ]
+
+    return def
+}
+
 export const PRESETS: { id: string, label: string, load: () => ParticleSystemDef }[] = [
     { id: 'fountain', label: 'fountain（boxrandom + gravity + fade）', load: fountainPreset },
     { id: 'galaxy', label: 'galaxy（vortex + turbulence + additive）', load: galaxyPreset },
     { id: 'snow', label: 'snow（oscillateposition + warmup）', load: snowPreset },
     { id: 'cursor-avoid', label: 'cursor avoid（controlpointattract + 鼠标）', load: cursorAvoidPreset },
+    { id: 'fireworks', label: 'fireworks（eventdeath 子粒子系统）', load: fireworksPreset },
 ]

@@ -1,12 +1,14 @@
 /**
- * 计算着色器：模拟主循环（prepare → spawn → simulate → finalize）。
+ * 计算着色器：模拟主循环 + 子粒子系统（children）。
  * 布局必须与 layout.ts / compile.ts 严格一致。
  *
- * 帧序（对齐 WE 的 CPU 执行顺序）：
- *   prepare(1 线程)   —— 结转发射计时器、算出各 emitter 本帧发射数
- *   spawn(64×16)      —— 每线程发射 1 个粒子：CAS 弹出空闲槽、跑 initializer 管线
- *   simulate(64×N)    —— 生命周期 → 恢复初始值 → operator 链 → 积分 → 追加渲染实例
- *   finalize(1 线程)  —— 把存活数写进 indirect draw 参数
+ * 父系统帧序：
+ *   prepare → spawn(rate 发射) → simulate(含 children 簿记：新生/跟随/死亡事件) → finalize
+ * 子系统帧序（在父之后 dispatch）：
+ *   prepare → childInstanceMain(实例老化/爆发配额) → childEventMain(处理父事件分配爆发实例)
+ *   → childSpawnMain(每实例发射) → simulate(cp 替换为实例位置) → finalize
+ *
+ * 实例布局：父持有合并实例缓冲，各子区域拼接（follow 区域与父粒子槽 1:1，burst 区域走自由列表）。
  */
 
 // prettier-ignore
@@ -31,7 +33,10 @@ struct Counters {
   emitCounts: vec4u,       // 16
   emitOffsets: vec4u,      // 32
   timers: vec4f,           // 48
-  frame: u32, _p0: u32, _p1: u32, _p2: u32,  // 64 → 总 80B
+  frame: u32, _p0: u32, _p1: u32, _p2: u32,  // 64
+  eventCount: atomic<u32>, // 80（父：本帧 spawn/death 事件数）
+  instFreeCount: atomic<u32>, // 84（子：爆发实例空闲数）
+  _pe0: u32, _pe1: u32,    // 88 → 总 96B
 };
 struct Particle {
   position: vec3f, lifetime: f32,
@@ -41,7 +46,7 @@ struct Particle {
   angularVelocity: vec3f, initSize: f32,
   color: vec3f, alpha: f32,
   initColor: vec3f, initAlpha: f32,
-  age: f32, spawnSequence: u32, state: u32, _pad: u32,
+  age: f32, spawnSequence: u32, state: u32, instanceId: u32,  // state: 0 死 / 1 活 / 2 新生
 };
 struct EmitterGpu {
   kindActive: vec4u,   // x: kind(0 box/1 sphere) y: active z: onePerFrame w: instantaneous
@@ -65,6 +70,22 @@ struct Program {
   initializers: array<IniGpu, 16>,
   operators: array<OpGpu, 16>,
   counts: vec4u,        // x: emitter 数 y: initializer 数 z: operator 数 w: capacity
+  children: array<vec4u, 8>,  // 父侧每 child 2 项：[2i]=(type,cpStart,active,prob) [2i+1]=(regionBase,regionCap,0,0)
+  childMetaA: vec4u,    // 父=(0,count,0,0)；子=(1, myType, cpStart, instanceBase)
+  childMetaB: vec4f,    // 子=(lifetime, instanceCap, probability, 0)；父未用
+};
+
+// 子实例：posAge.w = age；info = (state 0死/1活/2新生, burstRem, 0, 0)；emitted = 各 emitter 累计
+struct ChildInstance {
+  posAge: vec4f,
+  info: vec4u,
+  emitted: vec4u,
+  _pad: vec4u,
+};
+// 父粒子事件：pos.w = age；info = (kind 1=death 2=spawn, parentSlot, 0, 0)
+struct ChildEvent {
+  pos: vec4f,
+  info: vec4u,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -74,9 +95,18 @@ struct Program {
 @group(0) @binding(4) var<storage, read> program: Program;
 @group(0) @binding(5) var<storage, read_write> freeList: array<u32>;
 @group(0) @binding(6) var<storage, read_write> renderIndices: array<u32>;
+// 父：children 合并实例缓冲；子：同一缓冲（读自己的区域）
+@group(0) @binding(8) var<storage, read_write> instances: array<ChildInstance>;
+// 父：自己的事件缓冲（写）；子：父的事件缓冲（读）
+@group(0) @binding(9) var<storage, read_write> events: array<ChildEvent>;
+// 子：爆发实例自由列表（CAS 弹出）
+@group(0) @binding(10) var<storage, read_write> instanceFree: array<u32>;
+// 事件计数所在 Counters：父绑自己的 sys；子绑父的 sys（读 eventCount）
+@group(0) @binding(11) var<storage, read_write> eventSys: Counters;
 
 const INVALID: u32 = 4294967295u;
 const TAU: f32 = 6.28318530718;
+const MAX_EVENTS: u32 = 4096u;
 
 // ---------- 随机数（pcg hash，以 spawnSequence 为种子保证每粒子稳定） ----------
 fn pcg1d(v_: u32) -> u32 {
@@ -140,38 +170,42 @@ fn curlNoise(p: vec3f, seed: f32) -> vec3f {
 @compute @workgroup_size(1)
 fn prepareMain() {
   atomicStore(&sys.renderCount, 0u);
-  var timers = sys.timers;
-  var counts = vec4u(0u);
-  var offs = vec4u(0u);
-  var total = 0u;
-  let eCount = program.counts.x;
-  let alive = atomicLoad(&sys.alive);
-  for (var e = 0u; e < 4u; e++) {
-    if (e >= eCount) { break; }
-    let em = program.emitters[e];
-    var n = 0u;
-    let withinDuration = em.rateDur.y <= 0.0 || frame.time <= em.rateDur.y;
-    if (em.kindActive.y == 1u && withinDuration) {
-      if (em.kindActive.w > 0u && alive == 0u) {
-        // instantaneous：粒子集为空时一次性全发
-        n = em.kindActive.w;
-      } else if (em.rateDur.x > 0.0) {
-        timers[e] += frame.dt;
-        var c = u32(floor(timers[e] * em.rateDur.x));
-        if (em.kindActive.z == 1u && c > 1u) { c = 1u; }
-        let mp = u32(em.sign.w);
-        if (mp > 0u && c > mp) { c = mp; }
-        timers[e] -= f32(c) / em.rateDur.x;
-        n = c;
+  atomicStore(&sys.eventCount, 0u);
+  let isChild = program.childMetaA.x == 1u;
+  if (!isChild) {
+    var timers = sys.timers;
+    var counts = vec4u(0u);
+    var offs = vec4u(0u);
+    var total = 0u;
+    let eCount = program.counts.x;
+    let alive = atomicLoad(&sys.alive);
+    for (var e = 0u; e < 4u; e++) {
+      if (e >= eCount) { break; }
+      let em = program.emitters[e];
+      var n = 0u;
+      let withinDuration = em.rateDur.y <= 0.0 || frame.time <= em.rateDur.y;
+      if (em.kindActive.y == 1u && withinDuration) {
+        if (em.kindActive.w > 0u && alive == 0u) {
+          // instantaneous：粒子集为空时一次性全发
+          n = em.kindActive.w;
+        } else if (em.rateDur.x > 0.0) {
+          timers[e] += frame.dt;
+          var c = u32(floor(timers[e] * em.rateDur.x));
+          if (em.kindActive.z == 1u && c > 1u) { c = 1u; }
+          let mp = u32(em.sign.w);
+          if (mp > 0u && c > mp) { c = mp; }
+          timers[e] -= f32(c) / em.rateDur.x;
+          n = c;
+        }
       }
+      counts[e] = n;
+      offs[e] = total;
+      total += n;
     }
-    counts[e] = n;
-    offs[e] = total;
-    total += n;
+    sys.timers = timers;
+    sys.emitCounts = counts;
+    sys.emitOffsets = offs;
   }
-  sys.timers = timers;
-  sys.emitCounts = counts;
-  sys.emitOffsets = offs;
   sys.frame = sys.frame + 1u;
 }
 
@@ -208,21 +242,10 @@ fn applyInitializer(p: ptr<function, Particle>, ini: IniGpu, seq: u32, k: u32) {
   }
 }
 
-@compute @workgroup_size(64)
-fn spawnMain(@builtin(global_invocation_id) g: vec3u) {
-  let t = g.x;
-  // 找到本线程归属的 emitter（前缀偏移区间）
-  var e = -1;
-  for (var k = 0u; k < 4u; k++) {
-    if (t >= sys.emitOffsets[k] && t < sys.emitOffsets[k] + sys.emitCounts[k]) { e = i32(k); break; }
-  }
-  if (e < 0) { return; }
-
-  let slot = popFree();
-  if (slot == INVALID) { return; }
+/** 发射一个粒子：emitter 几何 + initializer 管线（父/子 spawn 共用）。originBase 为实例/控制点偏移后的原点。 */
+fn emitOne(slot: u32, em: EmitterGpu, originBase: vec3f, instanceId: u32) {
   atomicAdd(&sys.alive, 1u);
   let seq = atomicAdd(&sys.spawnSeq, 1u);
-  let em = program.emitters[u32(e)];
 
   var p: Particle;
   p.color = vec3f(1.0);
@@ -237,14 +260,17 @@ fn spawnMain(@builtin(global_invocation_id) g: vec3u) {
   p.rotation = vec3f(0.0);
   p.angularVelocity = vec3f(0.0);
   p.velocity = vec3f(0.0);
-  p.state = 1u;
+  p.state = 2u; // 新生：首帧 simulate 处理 children 簿记后转 1
   p.random = rnd(seq, 0u);
   p.spawnSequence = seq;
+  p.instanceId = instanceId;
 
-  // 发射原点（可挂 controlpoint）
-  var origin = em.origin.xyz;
-  let cp = i32(em.origin.w);
-  if (cp >= 0 && cp < 8) { origin += sysUniform.controlPoints[u32(cp)].xyz; }
+  var origin = em.origin.xyz + originBase;
+  if (instanceId == INVALID) {
+    // 父系统：发射器可挂 controlpoint
+    let cp = i32(em.origin.w);
+    if (cp >= 0 && cp < 8) { origin += sysUniform.controlPoints[u32(cp)].xyz; }
+  }
 
   var pos = origin;
   var vel = vec3f(0.0);
@@ -280,6 +306,21 @@ fn spawnMain(@builtin(global_invocation_id) g: vec3u) {
   p.simPos = p.position;
   p.age = 0.0;
   particles[slot] = p;
+}
+
+@compute @workgroup_size(64)
+fn spawnMain(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x;
+  // 找到本线程归属的 emitter（前缀偏移区间）
+  var e = -1;
+  for (var k = 0u; k < 4u; k++) {
+    if (t >= sys.emitOffsets[k] && t < sys.emitOffsets[k] + sys.emitCounts[k]) { e = i32(k); break; }
+  }
+  if (e < 0) { return; }
+
+  let slot = popFree();
+  if (slot == INVALID) { return; }
+  emitOne(slot, program.emitters[u32(e)], vec3f(0.0), INVALID);
 }
 
 // ---------- simulate ----------
@@ -376,18 +417,218 @@ fn applyPositionOscillator(p: ptr<function, Particle>, op: OpGpu, k: u32) {
   (*p).position += scale * cos(TAU * freq * (*p).age + phase);
 }
 
+// ---------- 父侧 children 簿记（父 simulate 内调用） ----------
+fn parentOnEvent(kind: u32, slot: u32, pos: vec3f, age: f32) {
+  let n = atomicAdd(&sys.eventCount, 1u);
+  if (n < MAX_EVENTS) {
+    events[n].pos = vec4f(pos, age);
+    events[n].info = vec4u(kind, slot, 0u, 0u);
+  }
+}
+
+/** 新生粒子：follow 子系统初始化 1:1 实例；eventspawn 子系统发事件。 */
+fn parentChildOnFresh(i: u32, p: ptr<function, Particle>) {
+  let metaA = program.childMetaA;
+  let count = metaA.y;
+  for (var ci = 0u; ci < 4u; ci++) {
+    if (ci >= count) { break; }
+    let d0 = program.children[ci * 2u];
+    if (d0.z != 1u) { continue; }
+    let d1 = program.children[ci * 2u + 1u];
+    if (d0.x == 3u) {
+      // eventfollow：实例槽位 = 父粒子槽位（1:1 直映）
+      var inst: ChildInstance;
+      inst.posAge = vec4f((*p).position, 0.0);
+      inst.info = vec4u(2u, 0u, 0u, 0u);
+      instances[d1.x + i] = inst;
+    } else if (d0.x == 2u) {
+      if (rnd((*p).spawnSequence, 700u + ci) * 1000.0 < f32(d0.w)) {
+        parentOnEvent(2u, i, (*p).position, 0.0);
+      }
+    }
+  }
+}
+
+/** 每帧：follow 子系统实例跟随父粒子位置。 */
+fn parentChildOnFrame(i: u32, p: ptr<function, Particle>) {
+  let metaA = program.childMetaA;
+  let count = metaA.y;
+  for (var ci = 0u; ci < 4u; ci++) {
+    if (ci >= count) { break; }
+    let d0 = program.children[ci * 2u];
+    if (d0.x != 3u || d0.z != 1u) { continue; }
+    let d1 = program.children[ci * 2u + 1u];
+    var inst = instances[d1.x + i];
+    if (inst.info.x != 0u) {
+      inst.posAge = vec4f((*p).position, inst.posAge.w);
+      instances[d1.x + i] = inst;
+    }
+  }
+}
+
+/** 粒子死亡：follow 实例终止；eventdeath 子系统发事件。 */
+fn parentChildOnDeath(i: u32, p: ptr<function, Particle>) {
+  let metaA = program.childMetaA;
+  let count = metaA.y;
+  for (var ci = 0u; ci < 4u; ci++) {
+    if (ci >= count) { break; }
+    let d0 = program.children[ci * 2u];
+    if (d0.z != 1u) { continue; }
+    let d1 = program.children[ci * 2u + 1u];
+    if (d0.x == 3u) {
+      instances[d1.x + i].info = vec4u(0u, 0u, 0u, 0u);
+    } else if (d0.x == 1u) {
+      if (rnd((*p).spawnSequence, 900u + ci) * 1000.0 < f32(d0.w)) {
+        parentOnEvent(1u, i, (*p).position, (*p).age);
+      }
+    }
+  }
+}
+
+// ---------- 子实例 pass ----------
+fn popInstance() -> u32 {
+  loop {
+    let c = atomicLoad(&sys.instFreeCount);
+    if (c == 0u) { return INVALID; }
+    let r = atomicCompareExchangeWeak(&sys.instFreeCount, c, c - 1u);
+    if (r.exchanged) {
+      return instanceFree[c - 1u];
+    }
+  }
+}
+
+/** 实例老化：follow 寿命由父粒子管理；death/spawn 按寿命过期并归还自由槽。新生转活跃并计算瞬时爆发配额。 */
+@compute @workgroup_size(64)
+fn childInstanceMain(@builtin(global_invocation_id) g: vec3u) {
+  let metaA = program.childMetaA;
+  if (metaA.x != 1u) { return; }
+  let s = g.x;
+  if (s >= u32(program.childMetaB.y)) { return; }
+  let base = metaA.w;
+  var inst = instances[base + s];
+  if (inst.info.x == 0u) { return; }
+  inst.posAge.w += frame.dt;
+
+  if (inst.info.x == 2u) {
+    // 新生 → 活跃；按各 emitter 的 instantaneous 总量设爆发余额
+    var burstTotal = 0u;
+    for (var e = 0u; e < 4u; e++) {
+      if (e >= program.counts.x) { break; }
+      burstTotal += program.emitters[e].kindActive.w;
+    }
+    inst.info.y = min(burstTotal, 1024u);
+    inst.info.x = 1u;
+  } else if (metaA.y != 3u && inst.posAge.w > program.childMetaB.x) {
+    // 爆发实例过期（follow 由父粒子死亡终止）
+    inst.info = vec4u(0u, 0u, 0u, 0u);
+    instances[base + s] = inst;
+    let c = atomicAdd(&sys.instFreeCount, 1u);
+    instanceFree[c] = s;
+    return;
+  }
+  instances[base + s] = inst;
+}
+
+/** 处理父事件：death/spawn 子系统按事件分配爆发实例。 */
+@compute @workgroup_size(64)
+fn childEventMain(@builtin(global_invocation_id) g: vec3u) {
+  let metaA = program.childMetaA;
+  if (metaA.x != 1u) { return; }
+  let myType = metaA.y;
+  if (myType == 0u || myType == 3u) { return; } // static 独立运行 / follow 由父直写
+  let t = g.x;
+  let n = atomicLoad(&eventSys.eventCount);
+  if (t >= n || t >= MAX_EVENTS) { return; }
+  let ev = events[t];
+  if (ev.info.x != myType) { return; }
+  // 概率门控（事件无独立 seq：父槽位 × 帧号哈希）
+  if (rnd((ev.info.y * 2654435761u) ^ sys.frame, 55u) >= program.childMetaB.z) { return; }
+
+  let slot = popInstance();
+  if (slot == INVALID) { return; }
+  var inst: ChildInstance;
+  inst.posAge = vec4f(ev.pos.xyz, 0.0);
+  inst.info = vec4u(2u, 0u, 0u, 0u);
+  instances[metaA.w + slot] = inst;
+}
+
+/** 子粒子发射：每实例 64 线程。瞬时余额优先（instantiate），否则 rate 按实例 age 结转（每帧每实例 ≤64）。 */
+@compute @workgroup_size(64)
+fn childSpawnMain(@builtin(global_invocation_id) g: vec3u) {
+  let metaA = program.childMetaA;
+  if (metaA.x != 1u) { return; }
+  let cap = u32(program.childMetaB.y);
+  let t = g.x;
+  let s = t / 64u;
+  let k = t % 64u;
+  if (s >= cap) { return; }
+  var inst = instances[metaA.w + s];
+  if (inst.info.x == 0u) { return; }
+
+  // 各 emitter 本帧发射数（全线程一致计算）
+  var counts = array<u32, 4>(0u, 0u, 0u, 0u);
+  var isBurst = inst.info.y > 0u;
+  if (isBurst) {
+    var rem = inst.info.y;
+    for (var e = 0u; e < 4u; e++) {
+      if (e >= program.counts.x) { break; }
+      let take = min(program.emitters[e].kindActive.w, rem);
+      counts[e] = take;
+      rem -= take;
+    }
+  } else {
+    for (var e = 0u; e < 4u; e++) {
+      if (e >= program.counts.x) { break; }
+      let em = program.emitters[e];
+      if (em.rateDur.x > 0.0) {
+        let n2 = u32(floor(em.rateDur.x * inst.posAge.w)) - inst.emitted[e];
+        counts[e] = min(n2, 64u);
+      }
+    }
+  }
+  let total = counts[0] + counts[1] + counts[2] + counts[3];
+
+  if (k == 0u) {
+    // 簿记（仅线程 0 写）
+    var emitted = inst.emitted;
+    for (var e = 0u; e < 4u; e++) { emitted[e] += counts[e]; }
+    inst.emitted = emitted;
+    if (isBurst) { inst.info.y = inst.info.y - total; }
+    instances[metaA.w + s] = inst;
+  }
+
+  if (k >= total) { return; }
+  // 展平序号 → (emitter, 框内序号)
+  var flat = k;
+  var e = 0u;
+  for (var q = 0u; q < 4u; q++) {
+    if (flat < counts[q]) { e = q; break; }
+    flat -= counts[q];
+    e = q + 1u;
+  }
+  if (e >= program.counts.x) { return; }
+
+  let slot = popFree();
+  if (slot == INVALID) { return; }
+  emitOne(slot, program.emitters[e], inst.posAge.xyz, s);
+}
+
+// ---------- simulate ----------
 @compute @workgroup_size(64)
 fn simulateMain(@builtin(global_invocation_id) g: vec3u) {
   let i = g.x;
   if (i >= program.counts.w) { return; }
   var p = particles[i];
-  if (p.state != 1u) { return; }
+  if (p.state == 0u) { return; }
+  let isChild = program.childMetaA.x == 1u;
+  let fresh = p.state == 2u;
 
   // 生命周期
   p.age += frame.dt;
   p.lifetime -= frame.dt;
   if (p.lifetime <= 0.0) {
     p.state = 0u;
+    if (!isChild) { parentChildOnDeath(i, &p); }
     let c = atomicAdd(&sys.freeCount, 1u);
     freeList[c] = i;
     atomicSub(&sys.alive, 1u);
@@ -395,12 +636,24 @@ fn simulateMain(@builtin(global_invocation_id) g: vec3u) {
     return;
   }
 
+  if (fresh) {
+    p.state = 1u;
+    if (!isChild) { parentChildOnFresh(i, &p); }
+  } else if (!isChild) {
+    parentChildOnFrame(i, &p);
+  }
+
   // WE 算子语义：每帧先恢复初始值，算子算绝对量
   p.color = p.initColor;
   p.alpha = p.initAlpha;
   p.size = p.initSize;
 
-  let cp = sysUniform.controlPoints;
+  var cp = sysUniform.controlPoints;
+  // 子系统：controlpoint[cpStart] = 所属实例位置（发射原点）
+  if (isChild && program.childMetaA.z < 8u && p.instanceId != INVALID) {
+    let inst = instances[program.childMetaA.w + p.instanceId];
+    cp[program.childMetaA.z] = vec4f(inst.posAge.xyz, 1.0);
+  }
   let opCount = program.counts.z;
   for (var k = 0u; k < 16u; k++) {
     if (k >= opCount) { break; }
