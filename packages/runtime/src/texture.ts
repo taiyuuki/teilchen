@@ -56,7 +56,7 @@ export async function createTextureFromUrl(device: GPUDevice, url: string): Prom
 export function imageToTexture(device: GPUDevice, img: HTMLCanvasElement | HTMLImageElement | ImageBitmap): GPUTexture {
     const w = 'naturalWidth' in img ? img.naturalWidth : img.width
     const h = 'naturalHeight' in img ? img.naturalHeight : img.height
-    const mipLevelCount = Math.max(1, Math.floor(Math.log2(Math.max(w, h))))
+    const mipLevelCount = Math.max(1, Math.floor(Math.log2(Math.max(w, h))) + 1)
     const texture = device.createTexture({
         size:   [w, h],
         format: 'rgba8unorm',
@@ -95,7 +95,7 @@ export async function createTextureFromTex(device: GPUDevice, data: ArrayBuffer,
 
 export function rgbaToTexture(device: GPUDevice, rgba: Uint8Array, w: number, h: number): GPUTexture {
     if (!w || !h || rgba.length < w * h * 4) throw new Error('rgba 数据与尺寸不符')
-    const mipLevelCount = Math.max(1, Math.floor(Math.log2(Math.max(w, h))))
+    const mipLevelCount = Math.max(1, Math.floor(Math.log2(Math.max(w, h))) + 1)
     const texture = device.createTexture({
         size:   [w, h],
         format: 'rgba8unorm',

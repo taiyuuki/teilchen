@@ -266,14 +266,12 @@ export function parseTex(input: ArrayBuffer | Uint8Array): TexImage {
             case 7:
                 rgba = decodeBC(p, width, height, 'bc1')
                 break
-            case 8: { // RG88 → RGBA（RG 通道语义因用途而异，先按直通）
+            case 8: { // RG88 → alpha(R) + 灰度(G)（WE 粒子 rg88 为 (a, luminance) 布局，alphachannelpriority）
                 if (p.length < width * height * 2) throw new Error('tex: RG88 数据不足')
                 rgba = new Uint8Array(width * height * 4)
                 for (let i = 0, j = 0; i < width * height; i++, j += 4) {
-                    rgba[j] = p[i * 2]!
-                    rgba[j + 1] = p[i * 2 + 1]!
-                    rgba[j + 2] = 255
-                    rgba[j + 3] = 255
+                    rgba[j] = rgba[j + 1] = rgba[j + 2] = p[i * 2 + 1]!
+                    rgba[j + 3] = p[i * 2]!
                 }
                 break
             }
