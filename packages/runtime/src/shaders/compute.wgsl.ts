@@ -73,6 +73,8 @@ struct Program {
   children: array<vec4u, 8>,  // 父侧每 child 2 项：[2i]=(type,cpStart,active,prob) [2i+1]=(regionBase,regionCap,0,0)
   childMetaA: vec4u,    // 父=(0,count,0,0)；子=(1, myType, cpStart, instanceBase)
   childMetaB: vec4f,    // 子=(lifetime, instanceCap, probability, 0)；父未用
+  renderer0: vec4u,     // (mode, segments, 0, 0)  mode: 0 sprite/1 spritetrail/2 ropetrail/3 rope
+  renderer1: vec4f,     // (length, maxlength, interval, 0)
 };
 
 // 子实例：posAge.w = age；info = (state 0死/1活/2新生, burstRem, 0, 0)；emitted = 各 emitter 累计
@@ -97,16 +99,25 @@ struct ChildEvent {
 @group(0) @binding(6) var<storage, read_write> renderIndices: array<u32>;
 // 父：children 合并实例缓冲；子：同一缓冲（读自己的区域）
 @group(0) @binding(8) var<storage, read_write> instances: array<ChildInstance>;
-// 父：自己的事件缓冲（写）；子：父的事件缓冲（读）
-@group(0) @binding(9) var<storage, read_write> events: array<ChildEvent>;
+// 父：自己的事件缓冲（写）；子：父的事件缓冲（读）。头部为原子计数
+struct EventBuffer {
+  count: atomic<u32>,
+  _p0: u32, _p1: u32, _p2: u32,
+  data: array<ChildEvent>,
+};
+@group(0) @binding(9) var<storage, read_write> events: EventBuffer;
 // 子：爆发实例自由列表（CAS 弹出）
 @group(0) @binding(10) var<storage, read_write> instanceFree: array<u32>;
-// 事件计数所在 Counters：父绑自己的 sys；子绑父的 sys（读 eventCount）
-@group(0) @binding(11) var<storage, read_write> eventSys: Counters;
+// ropetrail 历史环形缓冲（每粒子 64 槽 vec4：xyz + 时间桶号）
+@group(0) @binding(12) var<storage, read_write> trailHistory: array<vec4f>;
+// rope bitonic 排序参数（k, j, n；每 pass 由 CPU 写入）
+struct SortParams { k: u32, j: u32, n: u32, _pad: u32 };
+@group(0) @binding(13) var<uniform> sortParams: SortParams;
 
 const INVALID: u32 = 4294967295u;
 const TAU: f32 = 6.28318530718;
 const MAX_EVENTS: u32 = 4096u;
+const TRAIL_STRIDE: u32 = 64u; // 历史槽 stride（= MAX_TRAIL_SEGMENTS）
 
 // ---------- 随机数（pcg hash，以 spawnSequence 为种子保证每粒子稳定） ----------
 fn pcg1d(v_: u32) -> u32 {
@@ -176,7 +187,8 @@ fn curlNoise(p: vec3f, seed: f32) -> vec3f {
 @compute @workgroup_size(1)
 fn prepareMain() {
   atomicStore(&sys.renderCount, 0u);
-  atomicStore(&sys.eventCount, 0u);
+  // 事件计数只在父侧清零（子系统绑定的是父的事件缓冲，不能重复清）
+  if (program.childMetaA.x != 1u) { atomicStore(&events.count, 0u); }
   let isChild = program.childMetaA.x == 1u;
   if (!isChild) {
     var timers = sys.timers;
@@ -324,6 +336,16 @@ fn emitOne(slot: u32, em: EmitterGpu, originBase: vec3f, instanceId: u32) {
   p.simPos = p.position;
   p.age = 0.0;
   particles[slot] = p;
+
+  // ropetrail：历史环预填出生点（尾长从 0 平滑长出）
+  if (program.renderer0.x == 2u) {
+    let segs = max(program.renderer0.y, 2u);
+    let bin = u32(frame.time / max(program.renderer1.z, 1e-3));
+    for (var q = 0u; q < TRAIL_STRIDE; q++) {
+      if (q >= segs) { break; }
+      trailHistory[slot * TRAIL_STRIDE + q] = vec4f(p.position, f32(bin));
+    }
+  }
 }
 
 @compute @workgroup_size(64)
@@ -437,10 +459,10 @@ fn applyPositionOscillator(p: ptr<function, Particle>, op: OpGpu, k: u32) {
 
 // ---------- 父侧 children 簿记（父 simulate 内调用） ----------
 fn parentOnEvent(kind: u32, slot: u32, pos: vec3f, age: f32) {
-  let n = atomicAdd(&sys.eventCount, 1u);
+  let n = atomicAdd(&events.count, 1u);
   if (n < MAX_EVENTS) {
-    events[n].pos = vec4f(pos, age);
-    events[n].info = vec4u(kind, slot, 0u, 0u);
+    events.data[n].pos = vec4f(pos, age);
+    events.data[n].info = vec4u(kind, slot, 0u, 0u);
   }
 }
 
@@ -555,9 +577,9 @@ fn childEventMain(@builtin(global_invocation_id) g: vec3u) {
   let myType = metaA.y;
   if (myType == 0u || myType == 3u) { return; } // static 独立运行 / follow 由父直写
   let t = g.x;
-  let n = atomicLoad(&eventSys.eventCount);
+  let n = atomicLoad(&events.count);
   if (t >= n || t >= MAX_EVENTS) { return; }
-  let ev = events[t];
+  let ev = events.data[t];
   if (ev.info.x != myType) { return; }
   // 概率门控（事件无独立 seq：父槽位 × 帧号哈希）
   if (rnd((ev.info.y * 2654435761u) ^ sys.frame, 55u) >= program.childMetaB.z) { return; }
@@ -691,9 +713,65 @@ fn simulateMain(@builtin(global_invocation_id) g: vec3u) {
     }
   }
 
+  // ropetrail：当前时间桶写最新位置（w 存桶号，读取端按桶号校验）
+  if (program.renderer0.x == 2u) {
+    let segs = max(program.renderer0.y, 2u);
+    let bin = u32(frame.time / max(program.renderer1.z, 1e-3));
+    trailHistory[i * TRAIL_STRIDE + (bin % segs)] = vec4f(p.position, f32(bin));
+  }
+
   particles[i] = p;
-  let idx = atomicAdd(&sys.renderCount, 1u);
-  renderIndices[idx] = i;
+  if (program.renderer0.x == 2u) {
+    // ropetrail 压缩：每相邻历史点对展开一个段实例（entry = slot*64 + j）
+    let segs = max(program.renderer0.y, 2u);
+    let interval = max(program.renderer1.z, 1e-3);
+    let v = min(segs, u32(p.age / interval) + 1u); // 有效采样点数
+    for (var j = 0u; j < TRAIL_STRIDE; j++) {
+      if (j + 1u >= v) { break; }
+      let idx = atomicAdd(&sys.renderCount, 1u);
+      renderIndices[idx] = i * TRAIL_STRIDE + j;
+    }
+  }
+  else {
+    let idx = atomicAdd(&sys.renderCount, 1u);
+    renderIndices[idx] = i;
+  }
+}
+
+// ---------- rope 排序（bitonic，按 spawnSequence 升序） ----------
+/** 条目 → spawnSequence（ropetrail 条目是 slot*64+j 打包；rope/sprite 是裸槽位）。 */
+fn seqOf(entry: u32) -> u32 {
+  let slot = select(entry, entry / TRAIL_STRIDE, program.renderer0.x == 2u);
+  if (slot >= program.counts.w) { return INVALID; }
+  return particles[slot].spawnSequence;
+}
+
+/** 排序前置：count 之后的槽位置 INVALID（沉底）。 */
+@compute @workgroup_size(64)
+fn ropeSortInitMain(@builtin(global_invocation_id) g: vec3u) {
+  let i = atomicLoad(&sys.renderCount) + g.x;
+  if (i < program.counts.w) {
+    renderIndices[i] = INVALID;
+  }
+}
+
+@compute @workgroup_size(64)
+fn ropeSortMain(@builtin(global_invocation_id) g: vec3u) {
+  let i = g.x;
+  let n = sortParams.n;
+  if (i >= n) { return; }
+  let j = sortParams.j;
+  let partner = i ^ j;
+  if (partner <= i || partner >= n) { return; }
+  let ascending = (i & sortParams.k) == 0u;
+  let a = renderIndices[i];
+  let b = renderIndices[partner];
+  let sa = seqOf(a);
+  let sb = seqOf(b);
+  if (ascending == (sa > sb)) {
+    renderIndices[i] = b;
+    renderIndices[partner] = a;
+  }
 }
 
 // ---------- finalize：写 indirect draw 参数 ----------
@@ -707,8 +785,10 @@ struct DrawIndirect {
 
 @compute @workgroup_size(1)
 fn finalizeMain() {
+  let count = atomicLoad(&sys.renderCount);
   atomicStore(&drawArgs.vertexCount, 6u);
-  atomicStore(&drawArgs.instanceCount, atomicLoad(&sys.renderCount));
+  // rope：排序后相邻两条目连一段 → 段数 = count - 1
+  atomicStore(&drawArgs.instanceCount, select(count, count - 1u, program.renderer0.x == 3u && count > 0u));
   drawArgs.firstVertex = 0u;
   drawArgs.firstInstance = 0u;
 }

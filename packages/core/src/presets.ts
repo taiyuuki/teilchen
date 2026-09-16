@@ -227,10 +227,148 @@ export function fireworksPreset(): ParticleSystemDef {
     return def
 }
 
+export function cometPreset(): ParticleSystemDef {
+
+    // spritetrail：沿速度方向拉伸的运动拖影
+    const def = defaultSystem('comet')
+    def.material.blending = 'additive'
+    def.maxCount = 20000
+    def.renderers = [{ name: 'spritetrail', length: 0.25, maxlength: 160 }]
+    def.emitters = [
+        {
+            name:        'sphererandom',
+            rate:        350,
+            origin:      [0, 0, 0],
+            directions:  [1, 1, 0],
+            distancemin: 240,
+            distancemax: 280,
+            speedmin:    30,
+            speedmax:    90,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 4, max: 7 },
+        { name: 'sizerandom', min: 6, max: 16, exponent: 2 },
+        { name: 'colorrandom', min: [150, 200, 255], max: [220, 240, 255] },
+    ]
+    def.operators = [
+        { name: 'movement', gravity: [0, 0, 0], drag: 1.4 },
+        {
+            name:           'vortex',
+            controlpoint:   0,
+            axis:           [0, 0, 1],
+            distanceinner:  80,
+            distanceouter:  380,
+            speedinner:     520,
+            speedouter:     120,
+        },
+        { name: 'alphafade', fadeintime: 0.4, fadeouttime: 1.2 },
+    ]
+
+    return def
+}
+
+export function ropePreset(): ParticleSystemDef {
+
+    // rope：按发射顺序连成的下落绳链
+    const def = defaultSystem('rope-fall')
+    def.material.blending = 'translucent'
+    def.maxCount = 400
+    def.renderers = [{ name: 'rope', length: 1 }]
+    def.emitters = [
+        {
+            name:        'boxrandom',
+            rate:        26,
+            origin:      [-260, 320, 0],
+            directions:  [1, 1, 0],
+            distancemin: [-6, 0, 0],
+            distancemax: [6, 4, 0],
+            speedmin:    0,
+            speedmax:    0,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 8, max: 12 },
+        { name: 'sizerandom', min: 10, max: 14 },
+        { name: 'velocityrandom', min: [-6, -8, 0], max: [6, -2, 0] },
+        { name: 'colorrandom', min: [120, 220, 255], max: [200, 250, 255] },
+    ]
+    def.operators = [
+        { name: 'movement', gravity: [0, -240, 0], drag: 0.05 },
+        {
+            name:         'turbulence',
+            phasemin:     0,
+            phasemax:     100,
+            speedmin:     30,
+            speedmax:     90,
+            timescale:    0.5,
+            scale:        0.006,
+            mask:         [1, 1, 0],
+        },
+        { name: 'alphafade', fadeintime: 0.3, fadeouttime: 1.0 },
+    ]
+
+    return def
+}
+
+export function ribbonPreset(): ParticleSystemDef {
+
+    // ropetrail：每粒子拖着一条历史轨迹带
+    const def = defaultSystem('ribbon')
+    def.material.blending = 'additive'
+    def.maxCount = 800
+    def.renderers = [{ name: 'ropetrail', length: 0.02, maxlength: 2.4, segments: 16 }]
+    def.emitters = [
+        {
+            name:        'sphererandom',
+            rate:        40,
+            origin:      [0, 0, 0],
+            directions:  [1, 1, 0],
+            distancemin: 60,
+            distancemax: 200,
+            speedmin:    40,
+            speedmax:    120,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 5, max: 9 },
+        { name: 'sizerandom', min: 8, max: 14 },
+        { name: 'colorrandom', min: [120, 220, 255], max: [190, 160, 255] },
+    ]
+    def.operators = [
+        { name: 'movement', gravity: [0, 0, 0], drag: 0.8 },
+        {
+            name:           'vortex',
+            controlpoint:   0,
+            axis:           [0, 0, 1],
+            distanceinner:  40,
+            distanceouter:  300,
+            speedinner:     420,
+            speedouter:     80,
+        },
+        {
+            name:      'turbulence',
+            phasemin:  0,
+            phasemax:  100,
+            speedmin:  30,
+            speedmax:  90,
+            timescale: 0.4,
+            scale:     0.005,
+            mask:      [1, 1, 0],
+        },
+        { name: 'alphafade', fadeintime: 0.3, fadeouttime: 1.0 },
+    ]
+
+    return def
+}
+
 export const PRESETS: { id: string, label: string, load: () => ParticleSystemDef }[] = [
     { id: 'fountain', label: 'fountain（boxrandom + gravity + fade）', load: fountainPreset },
     { id: 'galaxy', label: 'galaxy（vortex + turbulence + additive）', load: galaxyPreset },
     { id: 'snow', label: 'snow（oscillateposition + warmup）', load: snowPreset },
     { id: 'cursor-avoid', label: 'cursor avoid（controlpointattract + 鼠标）', load: cursorAvoidPreset },
     { id: 'fireworks', label: 'fireworks（eventdeath 子粒子系统）', load: fireworksPreset },
+    { id: 'comet', label: 'comet（spritetrail 速度拖影）', load: cometPreset },
+    { id: 'rope-fall', label: 'rope fall（rope 绳链）', load: ropePreset },
+    { id: 'ribbon', label: 'ribbon（ropetrail 历史轨迹带）', load: ribbonPreset },
 ]

@@ -30,7 +30,9 @@ export const COUNTS_OFFSET = OPERATORS_OFFSET + MAX_OPERATORS * OPERATOR_STRIDE 
 export const CHILDREN_OFFSET = COUNTS_OFFSET + 16 // 3024
 /** 父侧 children 描述表（每 child 2×vec4u）+ 子侧元数据（2×vec4）。 */
 export const CHILD_META_OFFSET = CHILDREN_OFFSET + MAX_CHILDREN * 32 // 3152
-export const PROGRAM_BUFFER_SIZE = CHILD_META_OFFSET + 32 // 3184
+/** 渲染器信息（2×vec4）：R0 = (mode, segments, 0, 0) u32；R1 = (length, maxlength, interval, 0) f32。 */
+export const RENDERER_OFFSET = CHILD_META_OFFSET + 32 // 3184
+export const PROGRAM_BUFFER_SIZE = RENDERER_OFFSET + 32 // 3216
 
 // ---- 计数器（sysBuffer，原子区；80B 基础 + eventCount/instFreeCount = 96B） ----
 export const SYS_BUFFER_SIZE = 96
@@ -63,11 +65,15 @@ export const MAX_WORKGROUPS_FOR_EVENTS = MAX_EVENTS / 64
 /** 实例槽位无效标记。 */
 export const INSTANCE_INVALID = 0xffffffff
 
-// ---- sprite 动画 uniform（render 侧） ----
+// ---- trail/rope 渲染器 ----
+/** 每粒子历史采样点数上限（WE segments 默认 8，上限 256；v1 取 64 并作 stride）。 */
+export const MAX_TRAIL_SEGMENTS = 64
+
+/** sprite 动画 + 渲染器参数 uniform（render 侧）。 */
 export const MAX_SPRITE_FRAMES = 128
 
-/** params vec4u + anim vec4f + 每帧 2×vec4f。 */
-export const SPRITE_UNIFORM_SIZE = 32 + MAX_SPRITE_FRAMES * 2 * 16
+/** params vec4u + anim vec4f + 每帧 2×vec4f + renderer vec4f（mode/length/maxlength/segments）。 */
+export const SPRITE_UNIFORM_SIZE = 32 + MAX_SPRITE_FRAMES * 2 * 16 + 16
 
 // ---- 模块 kind 枚举（与 WGSL switch 一致） ----
 export const EmitterKind = { BoxRandom: 0, SphereRandom: 1 } as const
@@ -99,3 +105,6 @@ export const OperatorKind = {
 
 /** 子粒子系统类型（与 WGSL/ChildDesc 一致）。 */
 export const ChildType = { Static: 0, EventDeath: 1, EventSpawn: 2, EventFollow: 3 } as const
+
+/** 渲染器模式（与 WGSL/billboard 分支一致）。 */
+export const RendererMode = { Sprite: 0, SpriteTrail: 1, RopeTrail: 2, Rope: 3 } as const

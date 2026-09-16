@@ -17,10 +17,12 @@ import {
     MAX_EMITTERS,
     MAX_INITIALIZERS,
     MAX_OPERATORS,
+    MAX_TRAIL_SEGMENTS,
     OPERATORS_OFFSET,
     OPERATOR_STRIDE,
     OperatorKind,
     PROGRAM_BUFFER_SIZE,
+    RENDERER_OFFSET,
 } from './layout.ts'
 
 export interface CompiledProgram {
@@ -28,6 +30,7 @@ export interface CompiledProgram {
     emitterCount:     number;
     initializerCount: number;
     operatorCount:    number;
+    renderer:         CompiledRenderer;
     warnings:         string[];
 }
 
@@ -231,7 +234,39 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
     u32[COUNTS_OFFSET / 4 + 2] = operatorCount
     u32[COUNTS_OFFSET / 4 + 3] = 0 // capacity 由运行时填
 
-    return { data, emitterCount, initializerCount, operatorCount, warnings }
+    // ---- renderer（取 renderers[0]）----
+    const compiled = compileRenderer(def)
+    warnings.push(...compiled.warnings)
+    u32[RENDERER_OFFSET / 4 + 0] = compiled.mode
+    u32[RENDERER_OFFSET / 4 + 1] = compiled.segments
+    put4(f32, RENDERER_OFFSET / 4 + 4, compiled.length, compiled.maxlength, compiled.interval, 0)
+
+    return { data, emitterCount, initializerCount, operatorCount, warnings, renderer: compiled }
+}
+
+export interface CompiledRenderer {
+    mode:      number
+    segments:  number
+    length:    number
+    maxlength: number
+
+    /** ropetrail 采样间隔 = maxlength / segments（对齐 WE）。 */
+    interval: number
+    warnings: string[]
+}
+
+const RENDERER_CODES: Record<string, number> = { sprite: 0, spritetrail: 1, ropetrail: 2, rope: 3 }
+
+export function compileRenderer(def: ParticleSystemDef): CompiledRenderer {
+    const r = def.renderers[0] ?? { name: 'sprite' }
+    const mode = RENDERER_CODES[r.name] ?? 0
+    const warnings: string[] = []
+    if (RENDERER_CODES[r.name] === undefined) warnings.push(`未知渲染器 "${r.name}"，降级 sprite`)
+    const segments = mode === 2 ? Math.min(MAX_TRAIL_SEGMENTS, Math.max(2, Math.trunc(num(r.segments)) || 8)) : 0
+    const length = mode === 1 ? Math.max(0.001, num(r.length, 0.02)) : 0
+    const maxlength = mode === 1 || mode === 2 ? Math.max(0.01, num(r.maxlength, 5)) : 0
+
+    return { mode, segments, length, maxlength, interval: segments > 1 ? maxlength / segments : maxlength, warnings }
 }
 
 const CHILD_TYPE_CODES = { static: 0, eventdeath: 1, eventspawn: 2, eventfollow: 3 } as const

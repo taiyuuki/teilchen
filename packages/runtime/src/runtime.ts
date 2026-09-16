@@ -5,7 +5,7 @@
  * CPU 侧零回读；渲染走 indirect instanced billboard，实例数由 GPU 写出。
  */
 import type { ChildDef, ParticleSystemDef, SpawnType } from '@teilchen/core'
-import { burstLifetime, compileChildren, compileProgram } from './compile.ts'
+import { burstLifetime, compileChildren, compileProgram, compileRenderer } from './compile.ts'
 import type { SpriteFrame } from './tex.ts'
 import {
     CHILDREN_OFFSET,
@@ -18,8 +18,11 @@ import {
     MAX_CHILDREN,
     MAX_EVENTS,
     MAX_SPRITE_FRAMES,
+    MAX_TRAIL_SEGMENTS,
     MAX_WORKGROUPS_FOR_EVENTS,
     PROGRAM_BUFFER_SIZE,
+    RENDERER_OFFSET,
+    RendererMode,
     SPAWN_WORKGROUPS,
     SPRITE_UNIFORM_SIZE,
     SYS_BUFFER_SIZE,
@@ -124,6 +127,11 @@ interface SystemRes {
     events:       GPUBuffer | null
     instanceFree: GPUBuffer | null
     burstCap:     number
+
+    // ---- 渲染器（trail/rope） ----
+    rendererMode: number
+    trailHistory: GPUBuffer | null
+    sortN:        number // rope bitonic 排序的 2 的幂长度
 }
 
 export class ParticleRuntime {
@@ -144,8 +152,11 @@ export class ParticleRuntime {
         childInstance: GPUComputePipeline;
         childEvent:    GPUComputePipeline;
         childSpawn:    GPUComputePipeline;
+        ropeSort:      GPUComputePipeline;
+        ropeSortInit:  GPUComputePipeline;
     }
     private readonly dummyStorages:      GPUBuffer[]
+    private readonly sortParams:         GPUBuffer
     private readonly bglCompute:         GPUBindGroupLayout
     private readonly renderPipelines:    Map<string, GPURenderPipeline>
     private readonly defaultTextureView: GPUTextureView
@@ -193,7 +204,8 @@ export class ParticleRuntime {
                 { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
                 { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
                 { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-                { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
             ],
         })
         const computeLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bglCompute] })
@@ -207,8 +219,11 @@ export class ParticleRuntime {
             childInstance: mk('childInstanceMain'),
             childEvent:    mk('childEventMain'),
             childSpawn:    mk('childSpawnMain'),
+            ropeSort:      mk('ropeSortMain'),
+            ropeSortInit:  mk('ropeSortInitMain'),
         }
-        this.dummyStorages = Array.from({ length: 4 }, () => device.createBuffer({ size: 128, usage: GPUBufferUsage.STORAGE }))
+        this.dummyStorages = Array.from({ length: 5 }, () => device.createBuffer({ size: 128, usage: GPUBufferUsage.STORAGE }))
+        this.sortParams = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
 
         // render
         const billboardModule = device.createShaderModule({ code: BILLBOARD_WGSL, label: 'billboard' })
@@ -222,6 +237,7 @@ export class ParticleRuntime {
                 { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
                 { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
                 { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+                { binding: 7, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
             ],
         })
         const renderLayout = device.createPipelineLayout({ bindGroupLayouts: [bglRender] })
@@ -308,10 +324,21 @@ export class ParticleRuntime {
         const particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
         const sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
         const freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
-        const renderIndices = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
+        const idxPerParticle = compiled.renderer.mode === RendererMode.RopeTrail ? MAX_TRAIL_SEGMENTS : 1
+        const renderIndices = device.createBuffer({ size: capacity * idxPerParticle * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
         const sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         const spriteUniform = device.createBuffer({ size: SPRITE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         const indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
+
+        const trailHistory = compiled.renderer.mode === RendererMode.RopeTrail
+            ? device.createBuffer({ size: capacity * MAX_TRAIL_SEGMENTS * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            : null
+        if (trailHistory && capacity > 100_000) this.onWarning(`[${def.name}] ropetrail 容量 ${capacity.toLocaleString()} 的历史缓冲较大（${(capacity * MAX_TRAIL_SEGMENTS * 16 / 1048576).toFixed(0)}MB）`)
+        let sortN = 2
+        if (compiled.renderer.mode === RendererMode.Rope) {
+            sortN = 1 << Math.ceil(Math.log2(Math.max(2, capacity)))
+            if (sortN > 65536) this.onWarning(`[${def.name}] rope 容量过大（${capacity}），排序 pass 开销高`)
+        }
 
         // 父持有合并实例缓冲 + 事件缓冲；子持有爆发实例自由列表
         const instances: GPUBuffer | null = null
@@ -355,6 +382,9 @@ export class ParticleRuntime {
             events,
             instanceFree,
             burstCap,
+            rendererMode:   compiled.renderer.mode,
+            trailHistory,
+            sortN,
         }
         res.handle = {
             id:                        this.nextId++,
@@ -394,7 +424,7 @@ export class ParticleRuntime {
         res.instances = base > 0
             ? device.createBuffer({ size: base * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
             : null
-        res.events = device.createBuffer({ size: MAX_EVENTS * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+        res.events = device.createBuffer({ size: MAX_EVENTS * 32 + 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
 
         // 写父侧 children 描述表 + childMeta
         const compiledChildren = compileChildren(def)
@@ -485,7 +515,10 @@ export class ParticleRuntime {
         }
 
         const tex = opts.texture === undefined ? null : this.resolveTexture(opts)
-        if (capacity === res.capacity) {
+
+        // 渲染器模式变化需要重建索引/历史缓冲（容量不同构）
+        const rendererChanged = compiled.renderer.mode !== res.rendererMode
+        if (capacity === res.capacity && !rendererChanged) {
             this.writeProgramBuffer(res, compiled, capacity)
             if (tex || opts.sampler) {
                 if (tex) {
@@ -499,17 +532,25 @@ export class ParticleRuntime {
         }
         else {
 
-            // 容量变化：重建缓冲与 bindgroup（粒子状态不可保留）
-            for (const b of [res.program, res.particles, res.sys, res.freeList, res.renderIndices, res.sysUniform, res.indirect]) b.destroy()
+            // 容量/渲染器变化：重建缓冲与 bindgroup（粒子状态不可保留）
+            for (const b of [res.program, res.particles, res.sys, res.freeList, res.renderIndices, res.sysUniform, res.trailHistory, res.indirect]) b?.destroy()
             const device = this.device
+            const idxPerParticle = compiled.renderer.mode === RendererMode.RopeTrail ? MAX_TRAIL_SEGMENTS : 1
             res.program = device.createBuffer({ size: PROGRAM_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
             res.particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
             res.sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
             res.freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
-            res.renderIndices = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
+            res.renderIndices = device.createBuffer({ size: capacity * idxPerParticle * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
             res.sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+            res.trailHistory = compiled.renderer.mode === RendererMode.RopeTrail
+                ? device.createBuffer({ size: capacity * MAX_TRAIL_SEGMENTS * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+                : null
             res.indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
             res.capacity = capacity
+            res.rendererMode = compiled.renderer.mode
+            res.sortN = compiled.renderer.mode === RendererMode.Rope
+                ? 1 << Math.ceil(Math.log2(Math.max(2, capacity)))
+                : 2
             if (tex) {
                 res.textureView = tex.view
                 res.spriteFrames = tex.frames
@@ -569,14 +610,23 @@ export class ParticleRuntime {
         else {
             u32[0] = 0
         }
+
+        // 渲染器参数（mode/length/maxlength/segments；与 compileRenderer 一致）
+        const renderer = compileRenderer(def)
+        const ro = (32 + MAX_SPRITE_FRAMES * 2 * 16) / 4
+        u[ro] = renderer.mode
+        u[ro + 1] = renderer.length
+        u[ro + 2] = renderer.maxlength
+        u[ro + 3] = renderer.segments
         this.device.queue.writeBuffer(res.spriteUniform, 0, u)
     }
 
     private writeProgramBuffer(res: SystemRes, compiled: { data: Uint8Array }, capacity: number): void {
         const progData = new Uint8Array(compiled.data)
         new Uint32Array(progData.buffer, COUNTS_OFFSET + 12, 4)[0] = capacity // counts.w
-        // 只写 children 表之前的部分（尾部由 wireChildren 维护）
+        // 两段写入：children/childMeta 区由 wireChildren 维护，renderer 表在尾段
         this.device.queue.writeBuffer(res.program, 0, progData.buffer, 0, CHILDREN_OFFSET)
+        this.device.queue.writeBuffer(res.program, RENDERER_OFFSET, progData.buffer, RENDERER_OFFSET, PROGRAM_BUFFER_SIZE - RENDERER_OFFSET)
     }
 
     private makeBindGroups(res: SystemRes): void {
@@ -586,9 +636,6 @@ export class ParticleRuntime {
         const eventsBuf = res.role ? res.role.parent.events : res.events
         const freeBuf = res.instanceFree ?? this.dummyStorages[0]
 
-        // 父不能在 2/11 重复绑自己的 sys（可写别名冲突），父的 pass 不读 eventSys
-        // 父的 pass 不读 eventSys；绑 dummy 避免与 binding 2 的 sys 可写别名
-        const eventSysBuf = res.role ? res.role.parent.sys : this.dummyStorages[3]
         res.bgCompute = this.device.createBindGroup({
             layout:  this.bglCompute,
             entries: [
@@ -603,7 +650,8 @@ export class ParticleRuntime {
                 { binding: 8, resource: { buffer: instancesBuf ?? this.dummyStorages[1] } },
                 { binding: 9, resource: { buffer: eventsBuf ?? this.dummyStorages[2] } },
                 { binding: 10, resource: { buffer: freeBuf } },
-                { binding: 11, resource: { buffer: eventSysBuf } },
+                { binding: 12, resource: { buffer: res.trailHistory ?? this.dummyStorages[4] } },
+                { binding: 13, resource: { buffer: this.sortParams } },
             ],
         })
         const bglRender = this.renderPipelines.get('additive')!.getBindGroupLayout(0)
@@ -617,6 +665,7 @@ export class ParticleRuntime {
                 { binding: 4, resource: res.textureView },
                 { binding: 5, resource: res.sampler },
                 { binding: 6, resource: { buffer: res.spriteUniform } },
+                { binding: 7, resource: { buffer: res.trailHistory ?? this.dummyStorages[4] } },
             ],
         })
     }
@@ -651,7 +700,7 @@ export class ParticleRuntime {
 
         // 先递归移除子系统（子借用父的缓冲，不能先销毁）
         for (const c of [...s.children]) this.removeSystem(c.handle.id)
-        for (const b of [s.program, s.particles, s.sys, s.freeList, s.renderIndices, s.sysUniform, s.spriteUniform, s.indirect, s.instances, s.events, s.instanceFree, s.statsStaging]) b?.destroy()
+        for (const b of [s.program, s.particles, s.sys, s.freeList, s.renderIndices, s.sysUniform, s.spriteUniform, s.indirect, s.instances, s.events, s.instanceFree, s.trailHistory, s.statsStaging]) b?.destroy()
         this.systems.splice(idx, 1)
     }
 
@@ -770,18 +819,62 @@ export class ParticleRuntime {
         }
         this.writeFrameUniform(this.time, simulate ? dt : 0)
         const encoder = this.device.createCommandEncoder()
+        const ropeSystems: SystemRes[] = []
         for (const s of this.systems) {
             this.writeSysUniform(s)
-            if (simulate) this.dispatchSystemPasses(encoder, s)
+            if (simulate) {
+                this.dispatchSystemPasses(encoder, s)
+                if (s.rendererMode === RendererMode.Rope) ropeSystems.push(s)
+            }
         }
-        this.beginRender(encoder, pass => {
+        this.device.queue.submit([encoder.finish()])
+
+        // rope bitonic 排序：每 pass 依赖 CPU 写参（writeBuffer 在 submit 时生效，须逐 pass 提交）
+        if (simulate && ropeSystems.length) {
+            for (const s of ropeSystems) this.runRopeSort(s)
+        }
+
+        const renderEncoder = this.device.createCommandEncoder()
+        this.beginRender(renderEncoder, pass => {
             for (const s of this.systems) {
                 pass.setPipeline(s.pipelineRender)
                 pass.setBindGroup(0, s.bgRender)
                 pass.drawIndirect(s.indirect, 0)
             }
         })
+        this.device.queue.submit([renderEncoder.finish()])
+    }
+
+    /** rope 排序：init（count 之后置 INVALID）+ bitonic 全网络（按 spawnSequence 升序）。 */
+    private runRopeSort(s: SystemRes): void {
+        const params = new Uint32Array(4)
+        const sortWg = Math.ceil(s.sortN / WORKGROUP_SIZE)
+
+        // init
+        let encoder = this.device.createCommandEncoder()
+        let pass = encoder.beginComputePass()
+        pass.setBindGroup(0, s.bgCompute)
+        pass.setPipeline(this.pipelines.ropeSortInit)
+        pass.dispatchWorkgroups(Math.ceil(s.capacity / WORKGROUP_SIZE))
+        pass.end()
         this.device.queue.submit([encoder.finish()])
+
+        // bitonic 网络：for k in [2,4..N] for j in [k/2 .. 1]
+        for (let k = 2; k <= s.sortN; k <<= 1) {
+            for (let j = k >> 1; j > 0; j >>= 1) {
+                params[0] = k
+                params[1] = j
+                params[2] = s.sortN
+                this.device.queue.writeBuffer(this.sortParams, 0, params)
+                encoder = this.device.createCommandEncoder()
+                pass = encoder.beginComputePass()
+                pass.setBindGroup(0, s.bgCompute)
+                pass.setPipeline(this.pipelines.ropeSort)
+                pass.dispatchWorkgroups(sortWg)
+                pass.end()
+                this.device.queue.submit([encoder.finish()])
+            }
+        }
     }
 
     private dispatchSystemPasses(encoder: GPUCommandEncoder, s: SystemRes): void {

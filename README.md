@@ -56,7 +56,8 @@ pnpm typecheck
 - **initializer**：`colorrandom` `lifetimerandom` `sizerandom` `alpharandom` `velocityrandom` `rotationrandom` `angularvelocityrandom`
 - **operator**：`movement` `angularmovement` `alphafade` `alphachange` `sizechange` `colorchange` `oscillatealpha` `oscillatesize` `oscillateposition` `turbulence`（curl noise）`vortex` `controlpointattract`（scale<0 = 远离控制点，已用官方 cursor avoid 样例验证）
 - **controlpoint**：8 槽、`locktopointer` 鼠标跟随
-- **material**：blending（translucent/additive/normal）+ 贴图路径；`.tex` 解码、sprite sheet 动画、31 种 Photoshop colorBlendMode、rope/trail 渲染器 → 后续版本
+- **material**：blending（translucent/additive/normal）+ 贴图路径；31 种 Photoshop colorBlendMode → 后续版本
+- **renderer**：sprite / spritetrail / ropetrail / rope 全支持（length/maxlength/segments）
 - vec3 字段的 `"x y z"` 字符串 / 数组 / 标量三种写法均已兼容
 
 实测（M-series，Chrome）：WE 官方 exampleturbolence.json（rate 15000、maxcount 25000）稳定 **100fps vsync、alive ≈ 24.9k**。
@@ -69,6 +70,8 @@ pnpm typecheck
       GPU CAS 分配、按寿命过期）/ eventfollow（实例槽位与父粒子 1:1 直映，逐帧跟随）；
       子实例驱动子发射器（instantaneous 出生爆发 / rate 按实例 age 结转），
       子系统 controlpoint[cpStart] 替换为所属实例位置（vortex/attract 类算子可用）
-- [ ] rope/ropetrail/spritetrail 渲染器（GPU 排序或索引回读）
+- [x] rope/ropetrail/spritetrail 渲染器 ✓ —— spritetrail（速度拉伸拖影，无额外缓冲）、
+      ropetrail（时间分桶历史环形缓冲 + 相邻点连段，出生预填平滑长出）、
+      rope（renderIndices bitonic 排序按 spawnSequence 连段，逐 pass 提交驱动排序网络）
 - [ ] 31 种 colorBlendMode shader 化（`.tex` 解码与 sprite sheet 动画已完成 ✓）
 - [ ] 音频响应（FFT → uniform）、场景多层合成、pkg 容器读取、导出独立 HTML
