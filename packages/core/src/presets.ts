@@ -28,8 +28,8 @@ export function fountainPreset(): ParticleSystemDef {
     ]
     def.operators = [
         { name: 'movement', gravity: [0, -420, 0], drag: 0.6 },
-        { name: 'alphafade', fadeintime: 0.15, fadeouttime: 0.6 },
-        { name: 'sizechange', starttime: 0, endtime: 2.5, startvalue: 20, endvalue: 3 },
+        { name: 'alphafade', fadeintime: 0.07, fadeouttime: 0.27 },
+        { name: 'sizechange', starttime: 0, endtime: 1, startvalue: 1.4, endvalue: 0.3 },
     ]
 
     return def
@@ -78,7 +78,7 @@ export function galaxyPreset(): ParticleSystemDef {
             scale:     0.004,
             mask:      [1, 1, 0],
         },
-        { name: 'alphafade', fadeintime: 1.0, fadeouttime: 1.5 },
+        { name: 'alphafade', fadeintime: 0.12, fadeouttime: 0.19 },
     ]
 
     return def
@@ -118,7 +118,7 @@ export function snowPreset(): ParticleSystemDef {
             phasemin:      [0, 0, 0],
             phasemax:      [6.28, 6.28, 0],
         },
-        { name: 'alphafade', fadeintime: 0.8, fadeouttime: 2.0 },
+        { name: 'alphafade', fadeintime: 0.05, fadeouttime: 0.13 },
     ]
 
     return def
@@ -148,7 +148,7 @@ export function cursorAvoidPreset(): ParticleSystemDef {
     ]
     def.operators = [
         { name: 'movement', gravity: [0, 0, 0], drag: 2.5 },
-        { name: 'alphafade', fadeintime: 0.5 },
+        { name: 'alphafade', fadeintime: 0.11 },
         { name: 'controlpointattract', controlpoint: 1, scale: -6000, threshold: 110 },
     ]
 
@@ -181,7 +181,7 @@ export function fireworksPreset(): ParticleSystemDef {
     ]
     def.operators = [
         { name: 'movement', gravity: [0, -180, 0], drag: 0.15 },
-        { name: 'alphafade', fadeintime: 0.05, fadeouttime: 0.3 },
+        { name: 'alphafade', fadeintime: 0.03, fadeouttime: 0.18 },
     ]
 
     const child = defaultSystem('fireworks-burst')
@@ -207,8 +207,8 @@ export function fireworksPreset(): ParticleSystemDef {
     ]
     child.operators = [
         { name: 'movement', gravity: [0, -70, 0], drag: 1.1 },
-        { name: 'alphafade', fadeintime: 0.03, fadeouttime: 0.6 },
-        { name: 'colorchange', starttime: 0.2, endtime: 1.2, startvalue: [1, 0.95, 0.8], endvalue: [1, 0.35, 0.1] },
+        { name: 'alphafade', fadeintime: 0.03, fadeouttime: 0.55 },
+        { name: 'colorchange', starttime: 0.2, endtime: 1, startvalue: [1, 0.95, 0.8], endvalue: [1, 0.35, 0.1] },
     ]
     def.children = [
         {
@@ -262,7 +262,7 @@ export function cometPreset(): ParticleSystemDef {
             speedinner:     520,
             speedouter:     120,
         },
-        { name: 'alphafade', fadeintime: 0.4, fadeouttime: 1.2 },
+        { name: 'alphafade', fadeintime: 0.07, fadeouttime: 0.22 },
     ]
 
     return def
@@ -305,7 +305,7 @@ export function ropePreset(): ParticleSystemDef {
             scale:        0.006,
             mask:         [1, 1, 0],
         },
-        { name: 'alphafade', fadeintime: 0.3, fadeouttime: 1.0 },
+        { name: 'alphafade', fadeintime: 0.04, fadeouttime: 0.12 },
     ]
 
     return def
@@ -356,7 +356,7 @@ export function ribbonPreset(): ParticleSystemDef {
             scale:     0.005,
             mask:      [1, 1, 0],
         },
-        { name: 'alphafade', fadeintime: 0.3, fadeouttime: 1.0 },
+        { name: 'alphafade', fadeintime: 0.04, fadeouttime: 0.12 },
     ]
 
     return def

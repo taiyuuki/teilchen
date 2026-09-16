@@ -32,6 +32,12 @@ export interface MaterialDef {
     textures:   string[];
     depthTest:  boolean;
     depthWrite: boolean;
+
+    /** combos.REFRACT>0：WE 折射 shader，textures[1] 为法线贴图；仅渲染基色贴图近似。 */
+    refract?: boolean;
+
+    /** 纯折射（REFRACT 且基色为 util/white）：无可视基色，跳过渲染。 */
+    refractOnly?: boolean;
 }
 
 export interface ControlPointDef {

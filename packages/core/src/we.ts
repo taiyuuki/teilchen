@@ -4,7 +4,7 @@
  * 兼容 WE 的松散类型：vec3 为空格分隔字符串（也可能是数组/标量），
  * 数值字段可能是字符串，布尔有 true/false 两种写法。
  */
-import type { BlendMode, ChildDef, ParticleModule, ParticleSystemDef, SpawnType } from './types.ts'
+import type { BlendMode, ChildDef, ParticleModule, ParticleSystemDef, SpawnType, Vec3 } from './types.ts'
 import { defaultControlPoints, defaultMaterial, defaultSystem } from './types.ts'
 import { formatWeVec3, parseWeBool, parseWeFloat, parseWeInt, parseWeVec3 } from './value.ts'
 import { type ModuleKind, normalizeModule } from './registry.ts'
@@ -43,6 +43,19 @@ export function parseWeParticleJson(
         else if (typeof tex === 'object' && tex) def.material.textures = Object.values(tex).map(String)
         def.material.depthTest = parseWeBool(pass.depthtest, false) && String(pass.depthtest) !== 'disabled'
         def.material.depthWrite = parseWeBool(pass.depthwrite, false) && String(pass.depthwrite) !== 'disabled'
+
+        const combos = pass.combos as Record<string, unknown> | undefined
+        if (combos && Number(combos.REFRACT ?? 0) > 0) {
+            def.material.refract = true
+            // 纯折射：基色 util/white + 法线贴图，WE 中只扭曲背景、无可视粒子，近似渲染只会是白色巨块
+            if (def.material.textures[0] === 'util/white') {
+                def.material.refractOnly = true
+                warnings.push('material: 纯折射 pass（util/white+REFRACT）无基色，跳过渲染')
+            }
+            else {
+                warnings.push('material: REFRACT 折射未支持，仅渲染基色贴图近似')
+            }
+        }
     }
     else if (typeof src.material === 'string') {
         warnings.push(`material "${src.material}" 未提供内容，使用默认 additive/白贴图`)
@@ -80,14 +93,21 @@ export function parseWeParticleJson(
     }
     def.controlPoints = cps
 
-    // --- children（本阶段只解析不模拟） ---
+    // --- children：WE 编辑器只实例化显式声明 type 的组合（fireworks 的 eventdeath 等）；
+    //     无 type 的（glyphs/torch/lightning 的 static 伴随预设）不随导入生效，与 WE 实机行为一致 ---
     if (Array.isArray(src.children)) {
-        def.children = (src.children as Record<string, unknown>[]).map(c => {
-            const type = String(c.type ?? 'static') as SpawnType
+        def.children = (src.children as Record<string, unknown>[]).filter(c => c.type !== undefined).map(c => {
+            const type = String(c.type) as SpawnType
+
+            if (typeof c.type === 'string' && !['static', 'eventfollow', 'eventspawn', 'eventdeath'].includes(c.type)) {
+                warnings.push(`child "${String(c.name ?? '')}": 未知 type "${c.type}"，已忽略`)
+
+                return null
+            }
 
             return {
                 name:                   String(c.name ?? ''),
-                type:                   (['static', 'eventfollow', 'eventspawn', 'eventdeath'].includes(type) ? type : 'static') as SpawnType,
+                type:                   type as SpawnType,
                 maxCount:               parseWeInt(c.maxcount, 100),
                 controlPointStartIndex: parseWeInt(c.controlpointstartindex, 0),
                 probability:            parseWeFloat(c.probability, 1),
@@ -96,6 +116,9 @@ export function parseWeParticleJson(
                 angles:                 parseWeVec3(c.angles, [0, 0, 0]),
             } satisfies ChildDef
         })
+            .filter((c): c is ChildDef => c !== null)
+        const skipped = (src.children as Record<string, unknown>[]).length - def.children.length
+        if (skipped > 0) warnings.push(`${skipped} 个 children 未声明 type（WE 编辑器行为：不随导入实例化，已忽略）`)
     }
 
     if (!def.emitters.length) warnings.push('没有可用的 emitter（需要 boxrandom/sphererandom）')
@@ -187,6 +210,113 @@ export function normalizeDef(def: ParticleSystemDef): ParticleSystemDef {
             return { ...m, ...params }
         })
     }
+
+    return out
+}
+
+/**
+ * 递归解析 children 引用的子系统定义（child.name 为 WE 资产根相对路径）。
+ * load 由调用方提供（fetch/文件系统皆可）；失败静默跳过（保持 child.def 为空）。
+ */
+export async function attachChildDefs(
+    root: ParticleSystemDef,
+    load: (wePath: string) => Promise<ParticleSystemDef | undefined>,
+): Promise<void> {
+    const keep: typeof root.children = []
+    for (const child of root.children) {
+        if (!child.def && child.name.endsWith('.json')) {
+            try {
+                child.def = await load(child.name)
+            }
+            catch {
+
+                // 子定义加载失败由 load 方自行上报
+            }
+        }
+        if (child.def?.material.refractOnly) continue // 纯折射子系统无可视基色，跳过
+        if (child.def) await attachChildDefs(child.def, load)
+        keep.push(child)
+    }
+    root.children = keep
+}
+
+/**
+ * static 子系统的层变换（children 声明里的 origin/scale/angles）烘进独立 def 副本。
+ * scale 作用于全部空间量（发射半径/速度/尺寸/重力/拖尾长度/控制点偏移）；origin 平移发射原点。
+ * 返回深拷贝，不影响共享的子定义。
+ */
+export function applyChildLayerTransform(def: ParticleSystemDef, origin: Vec3, scale: Vec3, angles: Vec3): ParticleSystemDef {
+    const out = structuredClone(def)
+    const uniform = (scale[0] + scale[1] + scale[2]) / 3
+    const sv = (v: Vec3): Vec3 => [v[0] * scale[0], v[1] * scale[1], v[2] * scale[2]]
+    const sf = (n: number): number => n * uniform
+
+    out.origin = [
+        out.origin[0] * scale[0] + origin[0],
+        out.origin[1] * scale[1] + origin[1],
+        out.origin[2] * scale[2] + origin[2],
+    ]
+    out.angles = [out.angles[0] + angles[0], out.angles[1] + angles[1], out.angles[2] + angles[2]]
+
+    for (const em of out.emitters) {
+        const e = em as Record<string, unknown>
+        e.origin = sv((e.origin as Vec3) ?? [0, 0, 0])
+        e.distancemin = sv((e.distancemin as Vec3) ?? [0, 0, 0])
+        e.distancemax = sv((e.distancemax as Vec3) ?? [0, 0, 0])
+        e.speedmin = sf(Number(e.speedmin ?? 0))
+        e.speedmax = sf(Number(e.speedmax ?? 0))
+    }
+    for (const ini of out.initializers) {
+        const m = ini as Record<string, unknown>
+        if (m.name === 'sizerandom') {
+            m.min = sf(Number(m.min ?? 0))
+            m.max = sf(Number(m.max ?? 0))
+        }
+        else if (m.name === 'velocityrandom') {
+            m.min = sv((m.min as Vec3) ?? [0, 0, 0])
+            m.max = sv((m.max as Vec3) ?? [0, 0, 0])
+        }
+    }
+    for (const op of out.operators) {
+        const m = op as Record<string, unknown>
+        switch (m.name) {
+            case 'movement':
+                m.gravity = sv((m.gravity as Vec3) ?? [0, 0, 0])
+                break
+            case 'turbulence':
+                m.speedmin = sf(Number(m.speedmin ?? 0))
+                m.speedmax = sf(Number(m.speedmax ?? 0))
+                break
+            case 'vortex':
+            case 'vortex_v2':
+                m.distanceinner = sf(Number(m.distanceinner ?? 0))
+                m.distanceouter = sf(Number(m.distanceouter ?? 0))
+                m.speedinner = sf(Number(m.speedinner ?? 0))
+                m.speedouter = sf(Number(m.speedouter ?? 0))
+                if (m.name === 'vortex_v2') m.ringradius = sf(Number(m.ringradius ?? 0))
+                break
+            case 'controlpointattract':
+                m.threshold = sf(Number(m.threshold ?? 0))
+                m.origin = sv((m.origin as Vec3) ?? [0, 0, 0])
+                break
+            case 'oscillateposition':
+                m.scalemin = sv((m.scalemin as Vec3) ?? [0, 0, 0])
+                m.scalemax = sv((m.scalemax as Vec3) ?? [0, 0, 0])
+                break
+            case 'maintaindistancetocontrolpoint':
+                m.distance = sf(Number(m.distance ?? 0))
+                break
+        }
+    }
+    for (const rnd of out.renderers) {
+        const m = rnd as Record<string, unknown>
+        if (m.length !== undefined) m.length = sf(Number(m.length))
+        if (m.maxlength !== undefined) m.maxlength = sf(Number(m.maxlength))
+    }
+    out.controlPoints = out.controlPoints.map(cp => ({
+        ...cp,
+        offset: sv(cp.offset),
+    }))
 
     return out
 }
