@@ -338,12 +338,16 @@ export function compileRenderer(def: ParticleSystemDef): CompiledRenderer {
     const mode = RENDERER_CODES[r.name] ?? 0
     const warnings: string[] = []
     if (RENDERER_CODES[r.name] === undefined) warnings.push(`未知渲染器 "${r.name}"，降级 sprite`)
-    const segments = mode === 2 ? Math.min(MAX_TRAIL_SEGMENTS, Math.max(2, Math.trunc(num(r.segments)) || 8)) : 0
-    // WE 默认：spritetrail length 0.05 / maxlength 10（两参考实现一致）
-    const length = mode === 1 ? Math.max(0.001, num(r.length, 0.05)) : 0
-    const maxlength = mode === 1 || mode === 2 ? Math.max(0.01, num(r.maxlength, 10)) : 0
 
-    return { mode, segments, length, maxlength, interval: segments > 1 ? maxlength / segments : maxlength, warnings }
+    // WE：spritetrail length×speed 拉伸（maxlength 钳位，默认 0.05/10）；
+    //     ropetrail length = 拖尾时长（秒），采样间隔 = length/segments
+    //     （segments 引擎内部默认参考实现估 4，观感偏折线；取 8 平滑曲线，显式声明不受影响）
+    const segments = mode === 2 ? Math.min(MAX_TRAIL_SEGMENTS, Math.max(2, Math.trunc(num(r.segments)) || 8)) : 0
+    const length = (mode === 1 || mode === 2) ? Math.max(0.001, num(r.length, 0.05)) : 0
+    const maxlength = mode === 1 ? Math.max(0.01, num(r.maxlength, 10)) : 0
+    const interval = mode === 2 ? Math.max(1e-3, length / Math.max(segments, 1)) : 0
+
+    return { mode, segments, length, maxlength, interval, warnings }
 }
 
 const CHILD_TYPE_CODES = { static: 0, eventdeath: 1, eventspawn: 2, eventfollow: 3 } as const

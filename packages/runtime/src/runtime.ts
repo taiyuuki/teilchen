@@ -352,7 +352,7 @@ export class ParticleRuntime {
         for (const w of compiled.warnings) this.onWarning(`[${def.name}] ${w}`)
 
         const program = device.createBuffer({ size: PROGRAM_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
-        const particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+        const particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
         const sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
         const freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
         const idxPerParticle = compiled.renderer.mode === RendererMode.RopeTrail ? MAX_TRAIL_SEGMENTS : 1
@@ -574,7 +574,7 @@ export class ParticleRuntime {
             const device = this.device
             const idxPerParticle = compiled.renderer.mode === RendererMode.RopeTrail ? MAX_TRAIL_SEGMENTS : 1
             res.program = device.createBuffer({ size: PROGRAM_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
-            res.particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+            res.particles = device.createBuffer({ size: capacity * 128, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
             res.sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
             res.freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
             res.renderIndices = device.createBuffer({ size: capacity * idxPerParticle * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
@@ -653,13 +653,18 @@ export class ParticleRuntime {
         u[6] = Number.isFinite(res.texAspect) && res.texAspect > 0 ? res.texAspect : 1
 
         // 渲染器参数（mode/length/maxlength/segments；与 compileRenderer 一致）
+        // mode 2（ropetrail）的 length 槽写采样间隔 interval（秒）；blend.yzw = fadealpha/uvscale/uvscrolling
         const renderer = compileRenderer(def)
         const ro = (32 + MAX_SPRITE_FRAMES * 2 * 16) / 4
         u[ro] = renderer.mode
-        u[ro + 1] = renderer.length
+        u[ro + 1] = renderer.mode === 2 ? renderer.interval : renderer.length
         u[ro + 2] = renderer.maxlength
         u[ro + 3] = renderer.segments
         u[ro + 4] = Math.min(31, Math.max(0, Math.trunc(def.material.colorBlendMode) || 0))
+        const rnd = def.renderers[0] as Record<string, unknown> | undefined
+        u[ro + 5] = rnd && (rnd.fadealpha === true || Number(rnd.fadealpha) > 0) ? 1 : 0
+        u[ro + 6] = rnd ? Math.max(1e-3, Number(rnd.uvscale) || 1) : 1
+        u[ro + 7] = rnd && (rnd.uvscrolling === true || Number(rnd.uvscrolling) > 0) ? 1 : 0
         this.device.queue.writeBuffer(res.spriteUniform, 0, u)
     }
 

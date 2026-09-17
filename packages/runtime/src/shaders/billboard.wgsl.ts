@@ -31,8 +31,8 @@ struct SpriteUniform {
   params: vec4u,                    // x: frameCount  y: mode(0 无 / 1 sequence / 2 randomframe)
   anim: vec4f,                      // x: 平均帧时长  y: sequenceMultiplier  z: 贴图高/宽比（spritetrail 用）
   frames: array<vec4f, 256>,        // [2i] = (x, y, xAxis.x, xAxis.y)  [2i+1] = (yAxis.x, yAxis.y, frametime, 0)
-  renderer: vec4f,                  // x: 渲染模式  y: length  z: maxlength  w: segments
-  blend: vec4f,                     // x: colorBlendMode（0 无 / 1-31 WE 编号）
+  renderer: vec4f,                  // x: 渲染模式  y: spritetrail=length / ropetrail=interval  z: maxlength  w: segments
+  blend: vec4f,                     // x: colorBlendMode（0 无 / 1-31 WE 编号）  y: ropetrail fadealpha  z: uvscale  w: uvscrolling
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -228,40 +228,143 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     }
   }
   else if (mode == 2u) {
-    // ---- ropetrail：条目 j 连接历史点 S(j) → S(j+1) ----
+    // ---- ropetrail：连续带状拖尾 ----
+    // 平滑采样 P_k = mix(R(k+1), R(k), φ)（φ 为桶内相位），跨桶翻转无跳变、每帧连续移动；
+    // 相邻段在共享端点做 miter 斜接（同一对切线 → 角点严格重合），消除拐角楔形缺口；
+    // 贴图 v 轴沿整条拖尾展开（水滴/光束贴图给出纺锤轮廓），fadealpha 时 sin(π·t) 锥度。
     let entry = renderIndices[ii];
     let slot = entry / TRAIL_STRIDE;
     let j = entry % TRAIL_STRIDE;
     let p = particles[slot];
     let segs = max(u32(sprite.renderer.w), 2u);
-    let bin = u32(frame.time / max(sprite.renderer.z / f32(segs), 1e-3));
-    let A = trailPoint(slot, bin, segs, j, p.position);
-    let B = trailPoint(slot, bin, segs, j + 1u, p.position);
-    let d = B - A;
-    let len2 = length(d.xy);
-    let dir = select(vec2f(1.0, 0.0), normalize(d.xy), len2 > 1e-4);
-    let nrm = vec2f(-dir.y, dir.x);
-    // 宽度与透明度沿尾部渐减
-    let tf = 1.0 - f32(j) / f32(segs);
-    let width = max(p.size, 1.0) * 0.5 * (0.35 + 0.65 * tf);
-    world = A.xy + dir * (c.x * 0.5 + 0.5) * len2 + nrm * c.y * width;
-    uv = vec2f(c.x * 0.5 + 0.5, c.y * 0.5 + 0.5);
-    color = vec4f(p.color, clamp(p.alpha * tf, 0.0, 1.0));
+    let interval = max(sprite.renderer.y, 1e-3);          // mode2：length 槽 = 采样间隔（秒）
+    let bin = u32(frame.time / interval);
+    let ph = fract(frame.time / interval);
+
+    let RA = trailPoint(slot, bin, segs, j, p.position);
+    let RB = trailPoint(slot, bin, segs, j + 1u, p.position);
+    let RC = trailPoint(slot, bin, segs, j + 2u, p.position);
+    let RD = trailPoint(slot, bin, segs, j + 3u, p.position);
+    let RE = select(p.position, trailPoint(slot, bin, segs, j - 1u, p.position), j > 1u);
+
+    let A = select(p.position, mix(RB, RA, ph), j > 0u);   // P(j)：头段起点为粒子当前位置
+    let B = mix(RC, RB, ph);                               // P(j+1)
+    let Aprev = select(p.position, mix(RA, RE, ph), j > 1u); // P(j-1)
+    let Bnext = mix(RD, RC, ph);                           // P(j+2)
+
+    let width = max(p.size, 1.0) * 0.5;
+    let dSeg = B.xy - A.xy;
+    let lSeg = max(length(dSeg), 1e-5);
+    let dirS = dSeg / lSeg;
+    let nS = vec2f(-dirS.y, dirS.x);
+
+    // A 端斜接（j=0 为带头，平面封口不斜接）
+    var nA = nS;
+    var wA = width;
+    let dIn = A.xy - Aprev.xy;
+    if (j > 0u && dot(dIn, dIn) > 1e-8) {
+      let nIn = normalize(dIn);
+      let bis = nS + vec2f(-nIn.y, nIn.x);
+      if (dot(bis, bis) > 1e-4) {
+        nA = normalize(bis);
+        wA = width / max(dot(nA, nS), 0.4);
+      }
+    }
+
+    // B 端斜接（下一点过期塌缩到头时跳过，避免长跨矢量）
+    var nB = nS;
+    var wB = width;
+    let dOut = Bnext.xy - B.xy;
+    if (dot(dOut, dOut) > 1e-8 && dot(dOut, dOut) < 4.0 * lSeg * lSeg) {
+      let nOn = normalize(dOut);
+      let bis = nS + vec2f(-nOn.y, nOn.x);
+      if (dot(bis, bis) > 1e-4) {
+        nB = normalize(bis);
+        wB = width / max(dot(nB, nS), 0.4);
+      }
+    }
+
+    let s = c.x * 0.5 + 0.5;                    // 段内沿长度 [0,1]
+    world = mix(A.xy, B.xy, s) + mix(nA * wA, nB * wB, s) * c.y;
+
+    // uv：u 横跨宽度（贴图短轴），v 沿整条拖尾单调展开——头（粒子端）=0 → 尾=1，
+    // 水滴贴图的胖端在头部；反向映射会让 v 每段来回摆（逐段重复纹理 = 竹节感）
+    let along = mix(f32(j) / f32(segs), f32(j + 1u) / f32(segs), s);
+    let scale = max(sprite.blend.z, 1e-3);
+    let scroll = select(0.0, frame.time / (interval * f32(segs)), sprite.blend.w > 0.5);
+    uv = vec2f(c.y * 0.5 + 0.5, along * scale + scroll);
+    var a = clamp(p.alpha, 0.0, 1.0);
+    if (sprite.blend.y > 0.5) {
+      a *= sin(3.14159265 * clamp(along, 0.0, 1.0));
+    }
+    color = vec4f(p.color, a);
   }
   else {
-    // ---- rope：排序后相邻两条目连段 ----
+    // ---- rope：排序后相邻两条目连段（链按 spawnSequence 升序 = 年龄降序） ----
+    // 贴图 v 用归一化年龄沿整条链展开（整张贴图不再逐段重复，消除段间接缝暗部）；
+    // 相邻段 miter 斜接保证连续；颜色按端点插值（红绿渐变而非均值）。
     let slotA = renderIndices[ii];
     let slotB = renderIndices[ii + 1u];
     let a = particles[slotA];
     let b = particles[slotB];
-    let d = b.position - a.position;
-    let len2 = length(d.xy);
-    let dir = select(vec2f(1.0, 0.0), normalize(d.xy), len2 > 1e-4);
-    let nrm = vec2f(-dir.y, dir.x);
+    let A = a.position.xy;
+    let B = b.position.xy;
     let width = max((a.size + b.size) * 0.25, 1.0);
-    world = a.position.xy + dir * (c.x * 0.5 + 0.5) * len2 + nrm * c.y * width;
-    uv = vec2f(c.x * 0.5 + 0.5, c.y * 0.5 + 0.5);
-    color = vec4f((a.color + b.color) * 0.5, clamp((a.alpha + b.alpha) * 0.5, 0.0, 1.0));
+
+    let dSeg = B - A;
+    let lSeg = max(length(dSeg), 1e-5);
+    let dirS = dSeg / lSeg;
+    let nS = vec2f(-dirS.y, dirS.x);
+
+    // A 端斜接（链首为尾端封口）
+    var nA = nS;
+    var wA = width;
+    if (ii > 0u) {
+      let sp = renderIndices[ii - 1u];
+      if (sp != INVALID) {
+        let dIn = A - particles[sp].position.xy;
+        if (dot(dIn, dIn) > 1e-8) {
+          let nIn = normalize(dIn);
+          let bis = nS + vec2f(-nIn.y, nIn.x);
+          if (dot(bis, bis) > 1e-4) {
+            nA = normalize(bis);
+            wA = width / max(dot(nA, nS), 0.4);
+          }
+        }
+      }
+    }
+
+    // B 端斜接（链尾为头端封口；越界条目由 ropeSortInit 置 INVALID）
+    var nB = nS;
+    var wB = width;
+    let sn = renderIndices[ii + 2u];
+    if (sn != INVALID) {
+      let dOut = particles[sn].position.xy - B;
+      if (dot(dOut, dOut) > 1e-8) {
+        let nOn = normalize(dOut);
+        let bis = nS + vec2f(-nOn.y, nOn.x);
+        if (dot(bis, bis) > 1e-4) {
+          nB = normalize(bis);
+          wB = width / max(dot(nB, nS), 0.4);
+        }
+      }
+    }
+
+    let s = c.x * 0.5 + 0.5;
+    world = mix(A, B, s) + mix(nA * wA, nB * wB, s) * c.y;
+
+    // v：归一化年龄沿链展开（最新粒子=0 胖端 → 最旧=1 细端）
+    let vA = clamp(a.age / max(a.initLifetime, 1e-5), 0.0, 1.0);
+    let vB = clamp(b.age / max(b.initLifetime, 1e-5), 0.0, 1.0);
+    let along = mix(vA, vB, s);
+    let scale = max(sprite.blend.z, 1e-3);
+    let scroll = select(0.0, frame.time, sprite.blend.w > 0.5);
+    uv = vec2f(c.y * 0.5 + 0.5, along * scale + scroll);
+    var alphaOut = clamp(mix(b.alpha, a.alpha, s), 0.0, 1.0);
+    if (sprite.blend.y > 0.5) {
+      alphaOut *= sin(3.14159265 * clamp(along, 0.0, 1.0));
+    }
+    color = vec4f(mix(b.color, a.color, s), alphaOut);
   }
 
   // 世界坐标（像素，原点在画布中心，+y 向上）→ NDC

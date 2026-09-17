@@ -65,7 +65,7 @@ export function registerBuiltins(): void {
             { key: 'instantaneous', label: 'Instantaneous', type: 'int', default: 0, min: 0 },
             { key: 'maxtoemitperperiod', label: 'Max Per Period', type: 'int', default: 0, min: 0 },
             { key: 'duration', label: 'Duration', type: 'float', default: 0, min: 0 },
-            { key: 'controlpoint', label: 'Control Point', type: 'int', default: -1, min: -1, max: 7 },
+            { key: 'controlpoint', label: 'Control Point', type: 'int', default: 0, min: -1, max: 7 },
         ],
     })
     registerModule({
@@ -87,7 +87,7 @@ export function registerBuiltins(): void {
             { key: 'instantaneous', label: 'Instantaneous', type: 'int', default: 0, min: 0 },
             { key: 'maxtoemitperperiod', label: 'Max Per Period', type: 'int', default: 0, min: 0 },
             { key: 'duration', label: 'Duration', type: 'float', default: 0, min: 0 },
-            { key: 'controlpoint', label: 'Control Point', type: 'int', default: -1, min: -1, max: 7 },
+            { key: 'controlpoint', label: 'Control Point', type: 'int', default: 0, min: -1, max: 7 },
         ],
     })
 
@@ -364,11 +364,11 @@ export function registerBuiltins(): void {
         name:   'ropetrail',
         label:  'Rope Trail',
         params: [
-            { key: 'length', label: 'Length', type: 'float', default: 0.02 },
-            { key: 'maxlength', label: 'Max Length', type: 'float', default: 5 },
+            { key: 'length', label: 'Length（拖尾时长·秒）', type: 'float', default: 0.05 },
             { key: 'segments', label: 'Segments', type: 'int', default: 8 },
-            { key: 'subdivision', label: 'Subdivision', type: 'int', default: 4 },
             { key: 'fadealpha', label: 'Fade Alpha', type: 'float', default: 1 },
+            { key: 'uvscale', label: 'UV Scale', type: 'float', default: 1 },
+            { key: 'uvscrolling', label: 'UV Scrolling', type: 'float', default: 0 },
         ],
     })
 }
