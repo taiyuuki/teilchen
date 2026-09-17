@@ -830,7 +830,7 @@ export class ParticleRuntime {
     step(): void {
         const dt = (1 / 60) * this.speedMul
         this.simTime += dt
-        this.applyCpAngleDriver()
+        // cpAngleDriver 由 renderFrame 内逐系统应用
         this.renderFrame(dt, true)
         this.sampleStats(performance.now())
     }
@@ -855,12 +855,12 @@ export class ParticleRuntime {
         this.cpAngleDriver = fn && index >= 0 && index < 8 ? { index, fn } : null
     }
 
-    private applyCpAngleDriver(): void {
+    private applyCpAngleDriver(s: SystemRes): void {
         if (!this.cpAngleDriver) return
         const a = this.cpAngleDriver.fn(this.simTime)
         const u = new Float32Array([a[0], a[1], a[2], 0])
         const byteOffset = (40 + this.cpAngleDriver.index * 4) * 4
-        for (const s of this.systems) this.device.queue.writeBuffer(s.sysUniform, byteOffset, u)
+        this.device.queue.writeBuffer(s.sysUniform, byteOffset, u)
     }
 
     setPointer(canvasX: number, canvasY: number): void {
@@ -890,7 +890,7 @@ export class ParticleRuntime {
         }
 
         if (this.playing) this.simTime += dt
-        this.applyCpAngleDriver()
+        // cpAngleDriver 由 renderFrame 内逐系统应用
         this.renderFrame(dt, this.playing)
         this.sampleStats(now)
     }
@@ -917,6 +917,9 @@ export class ParticleRuntime {
         const ropeSystems: SystemRes[] = []
         for (const s of this.systems) {
             this.writeSysUniform(s)
+
+            // 驱动器在 writeSysUniform 之后覆盖（每帧全量重写 def 角度会冲掉动画值）
+            this.applyCpAngleDriver(s)
             if (simulate) {
                 this.dispatchSystemPasses(encoder, s)
                 if (s.rendererMode === RendererMode.Rope) ropeSystems.push(s)

@@ -243,8 +243,9 @@ async function main(): Promise<void> {
     }
 
     // 3D 空间预设的透视相机（WE 预览场景的倾斜视角；其余预设走 2D 正交）
+    // vortex_orb：WE 预览中环（512 世界单位）占满 256 视高 → 相机拉近到环径约占屏高 90%
     const PRESET_CAMERA: Record<string, { eye: [number, number, number], target: [number, number, number], fov: number }> = {
-        'magic_vortex_orb': { eye: [0, -620, 540], target: [0, 0, 0], fov: 50 },
+        'magic_vortex_orb': { eye: [0, -360, 315], target: [0, 0, 0], fov: 50 },
     }
 
     // 控制点角度（WE 编辑器"控制点角度"，随场景实例保存）：{ 预设: { cpIdx: [x,y,z] 弧度 } }
