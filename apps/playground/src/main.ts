@@ -213,11 +213,27 @@ async function main(): Promise<void> {
         const result = await ex.load()
         const defs = Array.isArray(result) ? result : [result]
         const asset = ex.asset ? await ex.asset() : await texFromMaterial(defs)
-        runtime.setCamera(PRESET_CAMERA[id.startsWith('preset:') ? id.slice(7) : ''] ?? null)
-        const cpAngles = PRESET_CP_ANGLES[id.startsWith('preset:') ? id.slice(7) : '']
+        const key = id.startsWith('preset:') ? id.slice(7) : ''
+        runtime.setCamera(PRESET_CAMERA[key] ?? null)
+        runtime.setSpeed(1)
+        runtime.setControlPointAngleDriver(-1, null)
+        const cpAngles = PRESET_CP_ANGLES[key]
         if (cpAngles) {
             for (const def of defs) {
                 for (const [idx, angles] of Object.entries(cpAngles)) def.controlPoints[+idx].angles = angles
+            }
+        }
+        const driver = PRESET_CP_ANGLE_DRIVERS[key]
+        if (driver) runtime.setControlPointAngleDriver(driver.index, driver.fn)
+        const instance = PRESET_INSTANCE[key]
+        if (instance?.size !== undefined && instance.size !== 1) {
+            for (const def of defs) {
+                for (const ini of def.initializers) {
+                    if (ini.name === 'sizerandom') {
+                        ini.min = Number(ini.min ?? 0) * instance.size
+                        ini.max = Number(ini.max ?? 0) * instance.size
+                    }
+                }
             }
         }
         for (const def of defs) {
@@ -232,8 +248,24 @@ async function main(): Promise<void> {
     }
 
     // 控制点角度（WE 编辑器"控制点角度"，随场景实例保存）：{ 预设: { cpIdx: [x,y,z] 弧度 } }
-    const PRESET_CP_ANGLES: Record<string, Record<number, [number, number, number]>> = {
-        'magic_vortex_orb': { 1: [0, 0.9, 0.5] },
+    const PRESET_CP_ANGLES: Record<string, Record<number, [number, number, number]>> = {}
+
+    // 控制点角度动画驱动器（WE previewvortexorb 的 controlpointangle1：y 通道 3s 循环进动）
+    const PRESET_CP_ANGLE_DRIVERS: Record<string, { index: number, fn: (t: number) => [number, number, number] }> = {
+        'magic_vortex_orb': {
+            index: 1,
+            fn:  t => {
+                const y0 = -0.62831855, y1 = -6.9710331
+                const ph = (t / 3) % 1
+
+                return [2.4783676, y0 + (y1 - y0) * ph, 0.022130774]
+            },
+        },
+    }
+
+    // 实例覆盖（WE instanceoverride）：size 缩放初始粒子尺寸
+    const PRESET_INSTANCE: Record<string, { size?: number }> = {
+        'magic_vortex_orb': { size: 0.36 },
     }
 
     /** 材质里第一个贴图路径（如 "particle/fire/fire1"）→ /we/tex/<path>.tex 解码。 */

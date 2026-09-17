@@ -189,6 +189,12 @@ export class ParticleRuntime {
     /** 可选透视相机（null = 既有 2D 正交路径，行为不变）。 */
     private camera: { eye: Vec3, target: Vec3, up: Vec3, fov: number } | null = null
 
+    /** 播放速度倍率（WE 预览工程的 instanceoverride.speed；1 = 实时）。 */
+    private speedMul = 1
+
+    /** 控制点角度驱动器（WE 场景实例的 controlpointangleN 动画）。 */
+    private cpAngleDriver: { index: number, fn: (simTime: number) => Vec3 } | null = null
+
     // stats
     private fpsFrames = 0
     private fpsLast = 0
@@ -360,7 +366,7 @@ export class ParticleRuntime {
         const freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
         const idxPerParticle = compiled.renderer.mode === RendererMode.RopeTrail ? MAX_TRAIL_SEGMENTS : 1
         const renderIndices = device.createBuffer({ size: capacity * idxPerParticle * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
-        const sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+        const sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
         const spriteUniform = device.createBuffer({ size: SPRITE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         const indirect = device.createBuffer({ size: INDIRECT_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST })
 
@@ -581,7 +587,7 @@ export class ParticleRuntime {
             res.sys = device.createBuffer({ size: SYS_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
             res.freeList = device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
             res.renderIndices = device.createBuffer({ size: capacity * idxPerParticle * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })
-            res.sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+            res.sysUniform = device.createBuffer({ size: SYS_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
             res.trailHistory = compiled.renderer.mode === RendererMode.RopeTrail
                 ? device.createBuffer({ size: capacity * MAX_TRAIL_SEGMENTS * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
                 : null
@@ -820,10 +826,12 @@ export class ParticleRuntime {
         this.playing = !paused
     }
 
-    /** 暂停时单步一帧（固定 1/60s）。 */
+    /** 暂停时单步一帧（固定 1/60s × 速度倍率）。 */
     step(): void {
-        this.simTime += 1 / 60
-        this.renderFrame(1 / 60, true)
+        const dt = (1 / 60) * this.speedMul
+        this.simTime += dt
+        this.applyCpAngleDriver()
+        this.renderFrame(dt, true)
         this.sampleStats(performance.now())
     }
 
@@ -835,6 +843,24 @@ export class ParticleRuntime {
         this.camera = cam
             ? { eye: cam.eye, target: cam.target, up: cam.up ?? [0, 0, 1], fov: cam.fov ?? 50 }
             : null
+    }
+
+    /** 播放速度倍率（发射率/运动/时间统一缩放；对应 WE instanceoverride.speed）。 */
+    setSpeed(multiplier: number): void {
+        this.speedMul = Math.max(0, multiplier)
+    }
+
+    /** 控制点角度动画驱动器（每帧以 simTime 求值写入 cpAngles；null 清除）。 */
+    setControlPointAngleDriver(index: number, fn: ((simTime: number) => Vec3) | null): void {
+        this.cpAngleDriver = fn && index >= 0 && index < 8 ? { index, fn } : null
+    }
+
+    private applyCpAngleDriver(): void {
+        if (!this.cpAngleDriver) return
+        const a = this.cpAngleDriver.fn(this.simTime)
+        const u = new Float32Array([a[0], a[1], a[2], 0])
+        const byteOffset = (40 + this.cpAngleDriver.index * 4) * 4
+        for (const s of this.systems) this.device.queue.writeBuffer(s.sysUniform, byteOffset, u)
     }
 
     setPointer(canvasX: number, canvasY: number): void {
@@ -853,7 +879,7 @@ export class ParticleRuntime {
     }
 
     private tick(now: number): void {
-        const dt = Math.min(1 / 30, Math.max(0, (now - this.lastNow) / 1000))
+        const dt = Math.min(1 / 30, Math.max(0, (now - this.lastNow) / 1000)) * this.speedMul
         this.lastNow = now
 
         this.fpsFrames++
@@ -864,6 +890,7 @@ export class ParticleRuntime {
         }
 
         if (this.playing) this.simTime += dt
+        this.applyCpAngleDriver()
         this.renderFrame(dt, this.playing)
         this.sampleStats(now)
     }
