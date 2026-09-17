@@ -56,7 +56,7 @@ export function registerBuiltins(): void {
         params:      [
             { key: 'rate', label: 'Rate', type: 'float', default: 10, min: 0, step: 0.1 },
             { key: 'origin', label: 'Origin', type: 'vec3', default: [0, 0, 0] },
-            { key: 'directions', label: 'Directions', type: 'vec3', default: [1, 1, 1] },
+            { key: 'directions', label: 'Directions', type: 'vec3', default: [1, 1, 0] },
             { key: 'distancemin', label: 'Distance Min', type: 'vec3', default: [0, 0, 0] },
             { key: 'distancemax', label: 'Distance Max', type: 'vec3', default: [100, 100, 0] },
             { key: 'speedmin', label: 'Speed Min', type: 'float', default: 0 },
@@ -76,7 +76,7 @@ export function registerBuiltins(): void {
         params:      [
             { key: 'rate', label: 'Rate', type: 'float', default: 10, min: 0, step: 0.1 },
             { key: 'origin', label: 'Origin', type: 'vec3', default: [0, 0, 0] },
-            { key: 'directions', label: 'Directions', type: 'vec3', default: [1, 1, 1] },
+            { key: 'directions', label: 'Directions', type: 'vec3', default: [1, 1, 0] },
             { key: 'distancemin', label: 'Radius Min', type: 'float', default: 0, min: 0 },
             { key: 'distancemax', label: 'Radius Max', type: 'float', default: 100, min: 0 },
             { key: 'speedmin', label: 'Speed Min', type: 'float', default: 0 },
