@@ -96,13 +96,8 @@ const WE_PRESETS = [
 /** WE 场景里粒子对象可拖放到任意位置；烟花/喷泉类通常摆在画布下部（否则火箭冲出顶部）。 */
 function placeAtBottom(def: ParticleSystemDef, canvas: HTMLCanvasElement): ParticleSystemDef {
 
-    // 发射位置由 emitter.origin 决定（def.origin 只影响控制点/gizmo 基准）
-    const dy = -canvas.clientHeight * 0.38
-    for (const em of def.emitters) {
-        const o = em.origin as [number, number, number] | undefined ?? [0, 0, 0]
-        em.origin = [o[0], o[1] + dy, o[2]]
-    }
-    def.origin[1] = dy
+    // def.origin 经控制点 0 流入全部发射器（emitter.controlpoint 默认 0，WE 语义）
+    def.origin[1] = -canvas.clientHeight * 0.38
 
     return def
 }
