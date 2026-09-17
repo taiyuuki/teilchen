@@ -1052,11 +1052,11 @@ export class ParticleRuntime {
                 -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
                 -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]), 1,
             ]
-            // vp = v × p（列主序 4×4 乘法）
+            // vp = p × v（投影作用于视图坐标；列主序 4×4 乘法）
             const vp = new Array(16).fill(0)
             for (let c = 0; c < 4; c++)
                 for (let r = 0; r < 4; r++)
-                    vp[c * 4 + r] = v[r] * p[c * 4] + v[4 + r] * p[c * 4 + 1] + v[8 + r] * p[c * 4 + 2] + v[12 + r] * p[c * 4 + 3]
+                    vp[c * 4 + r] = p[r] * v[c * 4] + p[4 + r] * v[c * 4 + 1] + p[8 + r] * v[c * 4 + 2] + p[12 + r] * v[c * 4 + 3]
             f.set(vp, 4)
             f.set([eye[0], eye[1], eye[2], (this.canvas.height / 2) / t], 20)
             f.set([x[0], x[1], x[2], 1], 24) // camRight + persp 标志
