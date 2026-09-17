@@ -70,8 +70,8 @@ export function imageToTexture(device: GPUDevice, img: HTMLCanvasElement | HTMLI
 }
 
 /** 解析 WE .tex 并上传为 TextureAsset（含 sprite 帧表与按 flags 的采样器）。 */
-export async function createTextureFromTex(device: GPUDevice, data: ArrayBuffer, label?: string): Promise<TextureAsset> {
-    const img = parseTex(data)
+export async function createTextureFromTex(device: GPUDevice, data: ArrayBuffer, label?: string, alphaChannelPriority = true): Promise<TextureAsset> {
+    const img = parseTex(data, alphaChannelPriority)
     let texture: GPUTexture
     if (img.container) {
         const blob = new Blob([img.container.bytes.slice().buffer as ArrayBuffer], { type: img.container.mime })

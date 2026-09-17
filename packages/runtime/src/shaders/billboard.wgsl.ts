@@ -204,8 +204,11 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
       if (sprite.params.y == 2u) {
         fi = u32(min(p.random, 0.999) * f32(fc));
       } else {
-        let t = p.age * max(sprite.anim.y, 1e-4) / max(sprite.anim.x, 1e-4);
-        fi = u32(t) % fc;
+        // WE 序列动画：帧 = 寿命进度 × sequenceMultiplier × 帧数（整段动画在粒子一生内
+        // 播放一遍；此前按帧时长以秒循环+回绕 → 高频频闪）
+        let prog = clamp(p.age / max(p.initLifetime, 1e-5), 0.0, 1.0);
+        let t = fract(prog * max(sprite.anim.y, 1e-4));
+        fi = u32(min(t * f32(fc), f32(fc) - 1.0));
       }
       let f0 = sprite.frames[fi * 2u];
       let f1 = sprite.frames[fi * 2u + 1u];

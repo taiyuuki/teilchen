@@ -185,7 +185,15 @@ async function loadTex(url: string): Promise<TextureAsset | null> {
             return r.arrayBuffer()
         })
 
-        return await createTextureFromTex(sharedDevice, buf)
+        // 同路径 .tex.json 描述（WE 的 .tex-json）：声明 rg88/r8 的 alphachannelpriority 等语义
+        let alphaPriority = true
+        try {
+            const desc = await fetch(`${url}.json`).then(r => (r.ok ? r.json() : null))
+            if (desc && typeof desc.alphachannelpriority === 'boolean') alphaPriority = desc.alphachannelpriority
+        }
+        catch { /* 描述缺失按默认 */ }
+
+        return await createTextureFromTex(sharedDevice, buf, undefined, alphaPriority)
     }
     catch(err) {
         warn(`.tex 加载失败: ${(err as Error).message}`)
