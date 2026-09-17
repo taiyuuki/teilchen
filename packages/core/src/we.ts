@@ -93,14 +93,14 @@ export function parseWeParticleJson(
     }
     def.controlPoints = cps
 
-    // --- children：WE 编辑器只实例化显式声明 type 的组合（fireworks 的 eventdeath 等）；
-    //     无 type 的（glyphs/torch/lightning 的 static 伴随预设）不随导入生效，与 WE 实机行为一致 ---
+    // --- children：缺省 type 为 static（WE ParseSpawnType 同语义——glyphs/torch 的
+    //     伴随光晕等不带 type 的 children 同样会实例化） ---
     if (Array.isArray(src.children)) {
-        def.children = (src.children as Record<string, unknown>[]).filter(c => c.type !== undefined).map(c => {
-            const type = String(c.type) as SpawnType
+        def.children = (src.children as Record<string, unknown>[]).map(c => {
+            const type = (c.type === undefined ? 'static' : String(c.type)) as SpawnType
 
-            if (typeof c.type === 'string' && !['static', 'eventfollow', 'eventspawn', 'eventdeath'].includes(c.type)) {
-                warnings.push(`child "${String(c.name ?? '')}": 未知 type "${c.type}"，已忽略`)
+            if (!['static', 'eventfollow', 'eventspawn', 'eventdeath'].includes(type)) {
+                warnings.push(`child "${String(c.name ?? '')}": 未知 type "${String(c.type)}"，已忽略`)
 
                 return null
             }
@@ -117,8 +117,6 @@ export function parseWeParticleJson(
             } satisfies ChildDef
         })
             .filter((c): c is ChildDef => c !== null)
-        const skipped = (src.children as Record<string, unknown>[]).length - def.children.length
-        if (skipped > 0) warnings.push(`${skipped} 个 children 未声明 type（WE 编辑器行为：不随导入实例化，已忽略）`)
     }
 
     if (!def.emitters.length) warnings.push('没有可用的 emitter（需要 boxrandom/sphererandom）')
@@ -248,7 +246,13 @@ export async function attachChildDefs(
 export function applyChildLayerTransform(def: ParticleSystemDef, origin: Vec3, scale: Vec3, angles: Vec3): ParticleSystemDef {
     const out = structuredClone(def)
     const uniform = (scale[0] + scale[1] + scale[2]) / 3
-    const sv = (v: Vec3): Vec3 => [v[0] * scale[0], v[1] * scale[1], v[2] * scale[2]]
+
+    // 保持形状的缩放：vec3 逐维缩放；标量（sphererandom 的半径等）按均匀缩放；缺省按 fallback
+    const sv = (v: Vec3 | number | undefined, fallback: Vec3 | number = [0, 0, 0]): Vec3 | number => {
+        if (typeof v === 'number') return v * uniform
+        const src = Array.isArray(v) ? v : (Array.isArray(fallback) ? fallback : [fallback, fallback, fallback])
+        return [src[0] * scale[0], src[1] * scale[1], src[2] * scale[2]]
+    }
     const sf = (n: number): number => n * uniform
 
     out.origin = [
@@ -260,9 +264,9 @@ export function applyChildLayerTransform(def: ParticleSystemDef, origin: Vec3, s
 
     for (const em of out.emitters) {
         const e = em as Record<string, unknown>
-        e.origin = sv((e.origin as Vec3) ?? [0, 0, 0])
-        e.distancemin = sv((e.distancemin as Vec3) ?? [0, 0, 0])
-        e.distancemax = sv((e.distancemax as Vec3) ?? [0, 0, 0])
+        e.origin = sv(e.origin as Vec3 | number | undefined, [0, 0, 0])
+        e.distancemin = sv(e.distancemin as Vec3 | number | undefined, 0)
+        e.distancemax = sv(e.distancemax as Vec3 | number | undefined, 0)
         e.speedmin = sf(Number(e.speedmin ?? 0))
         e.speedmax = sf(Number(e.speedmax ?? 0))
     }
@@ -315,7 +319,7 @@ export function applyChildLayerTransform(def: ParticleSystemDef, origin: Vec3, s
     }
     out.controlPoints = out.controlPoints.map(cp => ({
         ...cp,
-        offset: sv(cp.offset),
+        offset: sv(cp.offset, [0, 0, 0]) as Vec3,
     }))
 
     return out
