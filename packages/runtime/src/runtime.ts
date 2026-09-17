@@ -4,7 +4,7 @@
  * 模拟完全在 compute shader 中进行（free-list 槽位分配 + 原子计数），
  * CPU 侧零回读；渲染走 indirect instanced billboard，实例数由 GPU 写出。
  */
-import { type ChildDef, type ParticleSystemDef, type SpawnType, applyChildLayerTransform } from '@teilchen/core'
+import { type ChildDef, type ParticleSystemDef, type SpawnType, type Vec3, applyChildLayerTransform } from '@teilchen/core'
 import { burstLifetime, compileChildren, compileProgram, compileRenderer } from './compile.ts'
 import type { SpriteFrame } from './tex.ts'
 import {
@@ -185,6 +185,9 @@ export class ParticleRuntime {
     private simTime = 0
     private lastNow = 0
     private pointerWorld: [number, number] = [0, 0]
+
+    /** 可选透视相机（null = 既有 2D 正交路径，行为不变）。 */
+    private camera: { eye: Vec3, target: Vec3, up: Vec3, fov: number } | null = null
 
     // stats
     private fpsFrames = 0
@@ -824,6 +827,16 @@ export class ParticleRuntime {
         this.sampleStats(performance.now())
     }
 
+    /**
+     * 设置透视相机（null 恢复 2D 正交）。eye/target/up 为粒子世界坐标（像素单位，+y 向上），
+     * fov 为垂直视场角（度）。
+     */
+    setCamera(cam: { eye: Vec3, target: Vec3, up?: Vec3, fov?: number } | null): void {
+        this.camera = cam
+            ? { eye: cam.eye, target: cam.target, up: cam.up ?? [0, 0, 1], fov: cam.fov ?? 50 }
+            : null
+    }
+
     setPointer(canvasX: number, canvasY: number): void {
         const dpr = this.canvas.width / this.canvas.clientWidth || 1
         const px = canvasX * dpr
@@ -1013,6 +1026,49 @@ export class ParticleRuntime {
         f[1] = dt
         f[2] = this.canvas.width
         f[3] = this.canvas.height
+        if (this.camera) {
+
+            // 透视：view(lookAt) × perspective，列主序写 vp；camRight/camUp 供面向相机的 quad 轴
+            const { eye, target, up, fov } = this.camera
+            const zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2]
+            const zl = Math.hypot(zx, zy, zz) || 1
+            const z = [zx / zl, zy / zl, zz / zl] as Vec3
+            const xx = up[1] * z[2] - up[2] * z[1], xy = up[2] * z[0] - up[0] * z[2], xz = up[0] * z[1] - up[1] * z[0]
+            const xl = Math.hypot(xx, xy, xz) || 1
+            const x = [xx / xl, xy / xl, xz / xl] as Vec3
+            const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]] as Vec3
+            const aspect = this.canvas.width / Math.max(1, this.canvas.height)
+            const t = Math.tan((fov * Math.PI) / 180 / 2)
+            const near = 1, far = 100000
+            const tf = near * t, nf = 1 / (near - far)
+            // perspective（行主序推导，按列写出）
+            const p = [tf / aspect, 0, 0, 0, 0, tf, 0, 0, 0, 0, far * nf, -1, 0, 0, 2 * far * near * nf, 0]
+            // view = [x|y|z]^T 平移
+            const v = [
+                x[0], y[0], z[0], 0,
+                x[1], y[1], z[1], 0,
+                x[2], y[2], z[2], 0,
+                -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
+                -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
+                -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]), 1,
+            ]
+            // vp = v × p（列主序 4×4 乘法）
+            const vp = new Array(16).fill(0)
+            for (let c = 0; c < 4; c++)
+                for (let r = 0; r < 4; r++)
+                    vp[c * 4 + r] = v[r] * p[c * 4] + v[4 + r] * p[c * 4 + 1] + v[8 + r] * p[c * 4 + 2] + v[12 + r] * p[c * 4 + 3]
+            f.set(vp, 4)
+            f.set([eye[0], eye[1], eye[2], (this.canvas.height / 2) / t], 20)
+            f.set([x[0], x[1], x[2], 1], 24) // camRight + persp 标志
+            f.set([y[0], y[1], y[2], 0], 28) // camUp
+        }
+        else {
+
+            // 正交（默认）：camRight/camUp = 世界 X/Y，与旧路径逐位一致
+            f.set([0, 0, -10000, 0], 20)
+            f.set([1, 0, 0, 0], 24)
+            f.set([0, 1, 0, 0], 28)
+        }
         this.device.queue.writeBuffer(this.frameUniform, 0, f)
     }
 

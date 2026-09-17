@@ -213,10 +213,16 @@ async function main(): Promise<void> {
         const result = await ex.load()
         const defs = Array.isArray(result) ? result : [result]
         const asset = ex.asset ? await ex.asset() : await texFromMaterial(defs)
+        runtime.setCamera(PRESET_CAMERA[id.startsWith('preset:') ? id.slice(7) : ''] ?? null)
         for (const def of defs) {
             const childTextures = childTexByRoot.get(def)
             currentHandles.push(runtime.addSystem(def, { ...asset ? { texture: asset } : {}, ...childTextures ? { childTextures } : {} }))
         }
+    }
+
+    // 3D 空间预设的透视相机（WE 预览场景的倾斜视角；其余预设走 2D 正交）
+    const PRESET_CAMERA: Record<string, { eye: [number, number, number], target: [number, number, number], fov: number }> = {
+        'magic_vortex_orb': { eye: [0, -620, 540], target: [0, 0, 0], fov: 50 },
     }
 
     /** 材质里第一个贴图路径（如 "particle/fire/fire1"）→ /we/tex/<path>.tex 解码。 */

@@ -256,8 +256,10 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             }
             case OperatorKind.Turbulence: {
                 const mask = vec(p.mask, [1, 1, 1])
-                put4(f32, a, num(p.phasemin), num(p.phasemax, 100), num(p.speedmin), num(p.speedmax, 100))
-                put4(f32, b, num(p.timescale, 1), num(p.scale, 0.01), 0, 0)
+
+                // WE 参考：phasemin/max 0、speed 500-1000、timescale 20、scale 0.01
+                put4(f32, a, num(p.phasemin), num(p.phasemax), num(p.speedmin, 500), num(p.speedmax, 1000))
+                put4(f32, b, num(p.timescale, 20), num(p.scale, 0.01), 0, 0)
                 put4(f32, c, mask[0], mask[1], mask[2], 0)
                 break
             }

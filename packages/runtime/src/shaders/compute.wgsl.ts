@@ -458,13 +458,14 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
       let osc = (cos(freq * age + phase) + 1.0) * 0.5;
       (*p).size = max(0.0, (*p).size * mix(op.a.z, op.a.w, osc));
     }
-    case 9u {  // turbulence：curl noise 流场
+    case 9u {  // turbulence：WE 语义 —— 噪声输入 = 位置×scale×2，仅 x 随 (phase+timescale·t) 滚动，curl 归一化×speed
       let r = hashOp(seq, k);
       let phase = mix(op.a.x, op.a.y, r.x);
       let speed = mix(op.a.z, op.a.w, r.y);
-      let sp = (*p).simPos * op.b.y + vec3f((frame.time * op.b.x + phase) * 0.5);
-      let curl = curlNoise(sp, phase);
-      (*p).velocity += curl * op.c.rgb * speed * frame.dt;
+      let npos = (*p).simPos * (op.b.y * 2.0) + vec3f(phase + op.b.x * frame.time, 0.0, 0.0);
+      let c = curlNoise(npos, phase);
+      let cn = select(vec3f(0.0), normalize(c), dot(c, c) > 1e-9);
+      (*p).velocity += cn * op.c.rgb * speed * frame.dt;
     }
     case 10u {  // vortex：切向速度场（把切向分量拉向目标速度，避免加速度语义的持续累积甩散）
       let cpi = i32(op.b.w);

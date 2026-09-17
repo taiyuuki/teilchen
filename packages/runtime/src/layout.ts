@@ -41,7 +41,8 @@ export const SYS_BUFFER_SIZE = 96
 export const SYS_UNIFORM_SIZE = 16 + 16 + 8 * 16 + 16 // 176
 
 // ---- Frame uniform（全局） ----
-export const FRAME_UNIFORM_SIZE = 16 // time, dt, resX, resY
+// time/dt/res(vec4) + vp 矩阵(64) + eye.xyz/focal(16) + camRight.xyz/persp(16) + camUp.xyz(16)
+export const FRAME_UNIFORM_SIZE = 144
 
 // ---- draw indirect ----
 export const INDIRECT_SIZE = 16 // vertexCount, instanceCount, firstVertex, firstInstance

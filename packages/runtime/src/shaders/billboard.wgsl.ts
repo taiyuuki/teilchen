@@ -11,6 +11,10 @@
 export const BILLBOARD_WGSL = /* wgsl */ `
 struct Frame {
   time: f32, dt: f32, resX: f32, resY: f32,
+  vp: mat4x4f,                       // 透视相机（无相机 = 单位阵，走正交路径）
+  eye: vec4f,                        // xyz 相机位置  w focal（半高像素数/tan 半 fov）
+  camR: vec4f,                       // xyz 相机 right  w: 1 透视 / 0 正交
+  camU: vec4f,                       // xyz 相机 up
 };
 struct SysUniform {
   origin: vec4f,
@@ -184,7 +188,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
   let c = corners[vi];
   let mode = u32(sprite.renderer.x);
 
-  var world = vec2f(0.0);
+  var world = vec3f(0.0);
   var uv = c * 0.5 + vec2f(0.5);
   var color = vec4f(1.0);
 
@@ -209,22 +213,25 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     }
 
     if (mode == 0u) {
-      // sprite：面向相机的 quad（roll = rotation.z）
+      // sprite：面向相机的 quad（roll = rotation.z 绕视线）；camR/camU 无相机时为世界 X/Y
       let rot = p.rotation.z;
       let cs = cos(rot);
       let sn = sin(rot);
       let rc = vec2f(c.x * cs - c.y * sn, c.x * sn + c.y * cs);
-      world = p.position.xy + rc * max(p.size, 0.0) * 0.5;
+      world = p.position + (frame.camR.xyz * rc.x + frame.camU.xyz * rc.y) * (max(p.size, 0.0) * 0.5);
     } else {
       // spritetrail：WE ComputeParticleTrailTangents —— L = min(speed×length, maxlength) 为
-      // 粒子尺寸的倍数；quad 以粒子为中心沿速度对称拉伸，半长 = size/2 × 贴图高宽比 × L
-      let sp = length(p.velocity.xy);
-      let d = select(vec2f(1.0, 0.0), normalize(p.velocity.xy), sp > 1e-4);
-      let n = vec2f(-d.y, d.x);
+      // 粒子尺寸的倍数；quad 以粒子为中心沿速度对称拉伸，半长 = size/2 × 贴图高宽比 × L；
+      // 宽度轴 = cross(视线, 速度)（无相机正交时退化为速度的 2D 垂直）
+      let sp = length(p.velocity);
+      let d = select(vec3f(1.0, 0.0, 0.0), p.velocity / sp, sp > 1e-4);
+      let viewDir = normalize(p.position - frame.eye.xyz + vec3f(1e-4, 0.0, 0.0));
+      let r3 = cross(viewDir, d);
+      let n = select(vec3f(0.0, 1.0, 0.0), normalize(r3), dot(r3, r3) > 1e-8);
       let L = min(sp * sprite.renderer.y, sprite.renderer.z);
       let half = max(p.size, 0.0) * 0.5;
       let axisHalf = half * sprite.anim.z * L;
-      world = p.position.xy + n * (c.x * half) - d * (c.y * axisHalf);
+      world = p.position + n * (c.x * half) - d * (c.y * axisHalf);
     }
   }
   else if (mode == 2u) {
@@ -253,39 +260,50 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     let Bnext = mix(RD, RC, ph);                           // P(j+2)
 
     let width = max(p.size, 1.0) * 0.5;
-    let dSeg = B.xy - A.xy;
-    let lSeg = max(length(dSeg), 1e-5);
-    let dirS = dSeg / lSeg;
-    let nS = vec2f(-dirS.y, dirS.x);
+    let dSeg3 = B - A;
+    let lSeg = max(length(dSeg3), 1e-5);
+    let dirS = dSeg3 / lSeg;
+
+    // 端点法线 = cross(视线, 切线)（无相机时退化为 2D 垂直）
+    let vA = normalize(A - frame.eye.xyz + vec3f(1e-4, 0.0, 0.0));
+    let vB = normalize(B - frame.eye.xyz + vec3f(1e-4, 0.0, 0.0));
+    let cA = cross(vA, dirS);
+    let cB = cross(vB, dirS);
+    let nS_A = select(vec3f(0.0, 1.0, 0.0), normalize(cA), dot(cA, cA) > 1e-8);
+    let nS_B = select(vec3f(0.0, 1.0, 0.0), normalize(cB), dot(cB, cB) > 1e-8);
 
     // A 端斜接（j=0 为带头，平面封口不斜接）
-    var nA = nS;
+    var nA = nS_A;
     var wA = width;
-    let dIn = A.xy - Aprev.xy;
+    let dIn = A - Aprev;
     if (j > 0u && dot(dIn, dIn) > 1e-8) {
-      let nIn = normalize(dIn);
-      let bis = nS + vec2f(-nIn.y, nIn.x);
-      if (dot(bis, bis) > 1e-4) {
-        nA = normalize(bis);
-        wA = width / max(dot(nA, nS), 0.4);
+      let nIn = cross(vA, normalize(dIn));
+      if (dot(nIn, nIn) > 1e-8) {
+        let bis = nS_A + normalize(nIn);
+        if (dot(bis, bis) > 1e-4) {
+          nA = normalize(bis);
+          wA = width / max(dot(nA, nS_A), 0.4);
+        }
       }
     }
 
     // B 端斜接（下一点过期塌缩到头时跳过，避免长跨矢量）
-    var nB = nS;
+    var nB = nS_B;
     var wB = width;
-    let dOut = Bnext.xy - B.xy;
+    let dOut = Bnext - B;
     if (dot(dOut, dOut) > 1e-8 && dot(dOut, dOut) < 4.0 * lSeg * lSeg) {
-      let nOn = normalize(dOut);
-      let bis = nS + vec2f(-nOn.y, nOn.x);
-      if (dot(bis, bis) > 1e-4) {
-        nB = normalize(bis);
-        wB = width / max(dot(nB, nS), 0.4);
+      let nOn = cross(vB, normalize(dOut));
+      if (dot(nOn, nOn) > 1e-8) {
+        let bis = nS_B + normalize(nOn);
+        if (dot(bis, bis) > 1e-4) {
+          nB = normalize(bis);
+          wB = width / max(dot(nB, nS_B), 0.4);
+        }
       }
     }
 
     let s = c.x * 0.5 + 0.5;                    // 段内沿长度 [0,1]
-    world = mix(A.xy, B.xy, s) + mix(nA * wA, nB * wB, s) * c.y;
+    world = mix(A, B, s) + mix(nA * wA, nB * wB, s) * c.y;
 
     // uv：u 横跨宽度（贴图短轴），v 沿整条拖尾单调展开——头（粒子端）=0 → 尾=1，
     // 水滴贴图的胖端在头部；反向映射会让 v 每段来回摆（逐段重复纹理 = 竹节感）
@@ -307,45 +325,54 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     let slotB = renderIndices[ii + 1u];
     let a = particles[slotA];
     let b = particles[slotB];
-    let A = a.position.xy;
-    let B = b.position.xy;
     let width = max((a.size + b.size) * 0.25, 1.0);
+    let A = a.position;
+    let B = b.position;
 
-    let dSeg = B - A;
-    let lSeg = max(length(dSeg), 1e-5);
-    let dirS = dSeg / lSeg;
-    let nS = vec2f(-dirS.y, dirS.x);
+    let dSeg3 = B - A;
+    let lSeg = max(length(dSeg3), 1e-5);
+    let dirS = dSeg3 / lSeg;
+    let vdA = normalize(A - frame.eye.xyz + vec3f(1e-4, 0.0, 0.0));
+    let vdB = normalize(B - frame.eye.xyz + vec3f(1e-4, 0.0, 0.0));
+    let cA = cross(vdA, dirS);
+    let cB = cross(vdB, dirS);
+    let nS_A = select(vec3f(0.0, 1.0, 0.0), normalize(cA), dot(cA, cA) > 1e-8);
+    let nS_B = select(vec3f(0.0, 1.0, 0.0), normalize(cB), dot(cB, cB) > 1e-8);
 
     // A 端斜接（链首为尾端封口）
-    var nA = nS;
+    var nA = nS_A;
     var wA = width;
     if (ii > 0u) {
       let sp = renderIndices[ii - 1u];
       if (sp != INVALID) {
-        let dIn = A - particles[sp].position.xy;
+        let dIn = A - particles[sp].position;
         if (dot(dIn, dIn) > 1e-8) {
-          let nIn = normalize(dIn);
-          let bis = nS + vec2f(-nIn.y, nIn.x);
-          if (dot(bis, bis) > 1e-4) {
-            nA = normalize(bis);
-            wA = width / max(dot(nA, nS), 0.4);
+          let nIn = cross(vdA, normalize(dIn));
+          if (dot(nIn, nIn) > 1e-8) {
+            let bis = nS_A + normalize(nIn);
+            if (dot(bis, bis) > 1e-4) {
+              nA = normalize(bis);
+              wA = width / max(dot(nA, nS_A), 0.4);
+            }
           }
         }
       }
     }
 
     // B 端斜接（链尾为头端封口；越界条目由 ropeSortInit 置 INVALID）
-    var nB = nS;
+    var nB = nS_B;
     var wB = width;
     let sn = renderIndices[ii + 2u];
     if (sn != INVALID) {
-      let dOut = particles[sn].position.xy - B;
+      let dOut = particles[sn].position - B;
       if (dot(dOut, dOut) > 1e-8) {
-        let nOn = normalize(dOut);
-        let bis = nS + vec2f(-nOn.y, nOn.x);
-        if (dot(bis, bis) > 1e-4) {
-          nB = normalize(bis);
-          wB = width / max(dot(nB, nS), 0.4);
+        let nOn = cross(vdB, normalize(dOut));
+        if (dot(nOn, nOn) > 1e-8) {
+          let bis = nS_B + normalize(nOn);
+          if (dot(bis, bis) > 1e-4) {
+            nB = normalize(bis);
+            wB = width / max(dot(nB, nS_B), 0.4);
+          }
         }
       }
     }
@@ -367,11 +394,16 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     color = vec4f(mix(b.color, a.color, s), alphaOut);
   }
 
-  // 世界坐标（像素，原点在画布中心，+y 向上）→ NDC
-  let ndc = vec2f(world.x / frame.resX * 2.0, world.y / frame.resY * 2.0);
+  // 世界坐标（像素，原点在画布中心，+y 向上）→ 裁剪空间
+  var clip: vec4f;
+  if (frame.camR.w > 0.5) {
+    clip = frame.vp * vec4(world, 1.0);
+  } else {
+    clip = vec4f(world.x / frame.resX * 2.0, world.y / frame.resY * 2.0, 0.0, 1.0);
+  }
 
   var o: VOut;
-  o.pos = vec4f(ndc, 0.0, 1.0);
+  o.pos = clip;
   o.uv = uv;
   o.color = color;
 
