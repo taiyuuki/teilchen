@@ -1081,13 +1081,17 @@ export class ParticleRuntime {
         u[4] = this.pointerWorld[0]
         u[5] = this.pointerWorld[1]
 
-        // control points：世界坐标 = origin + offset (+ 指针跟随)
+        // control points：世界坐标 = origin + offset (+ 指针跟随)；angles（WE 控制点角度）
         for (let i = 0; i < 8; i++) {
             const cp = def.controlPoints[i]
             const o = 8 + i * 4
             u[o] = def.origin[0] + cp.offset[0] + (cp.lockToPointer ? this.pointerWorld[0] : 0)
             u[o + 1] = def.origin[1] + cp.offset[1] + (cp.lockToPointer ? this.pointerWorld[1] : 0)
             u[o + 2] = def.origin[2] + cp.offset[2]
+            const a = 40 + i * 4
+            u[a] = cp.angles[0]
+            u[a + 1] = cp.angles[1]
+            u[a + 2] = cp.angles[2]
         }
         this.device.queue.writeBuffer(s.sysUniform, 0, u)
     }

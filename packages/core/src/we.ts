@@ -88,6 +88,7 @@ export function parseWeParticleJson(
             if (id < 0 || id >= 8) continue
             cps[id].flags = parseWeInt(raw.flags, 0)
             cps[id].offset = parseWeVec3(raw.offset, [0, 0, 0])
+            cps[id].angles = parseWeVec3(raw.angles, [0, 0, 0])
             cps[id].lockToPointer = parseWeBool(raw.locktopointer, (cps[id].flags & 1) !== 0)
         }
     }

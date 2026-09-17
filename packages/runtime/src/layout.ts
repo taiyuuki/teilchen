@@ -38,7 +38,7 @@ export const PROGRAM_BUFFER_SIZE = RENDERER_OFFSET + 32 // 3216
 export const SYS_BUFFER_SIZE = 96
 
 // ---- 每系统 uniform（每帧更新：origin/pointer/controlpoints + mode） ----
-export const SYS_UNIFORM_SIZE = 16 + 16 + 8 * 16 + 16 // 176
+export const SYS_UNIFORM_SIZE = 16 + 16 + 8 * 16 + 8 * 16 + 16 // 304：origin/pointer + controlPoints + cpAngles + 预留
 
 // ---- Frame uniform（全局） ----
 // time/dt/res(vec4) + vp 矩阵(64) + eye.xyz/focal(16) + camRight.xyz/persp(16) + camUp.xyz(16)

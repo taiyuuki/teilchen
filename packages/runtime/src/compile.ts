@@ -191,7 +191,6 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             warnings.push(`operator "boids"：容量 ${def.maxCount} 过大（O(N²) 邻居搜索限 256），已跳过`)
             continue
         }
-        const expandVortexV2Ring = raw.name === 'vortex_v2'
         const p = norm('operator', raw, warnings)
         const o = OPERATORS_OFFSET / 4 + operatorCount * (OPERATOR_STRIDE / 4)
         u32[o + 0] = kind
@@ -265,15 +264,15 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             }
             case OperatorKind.Vortex: {
                 const axis = vec(p.axis, [0, 0, 1])
+                const offset = vec(p.offset, [0, 0, 0])
 
-                // vortex_v2：以 ringradius 推导衰减区间（真展开为 vortex + maintain 两条，见后）；
-                // v2 的 speed 是 WE 内部量纲（约为像素速度 10 倍），×0.1 经验标定
-                const ring = expandVortexV2Ring ? num(p.ringradius, 100) : 0
-                const dInner = ring ? Math.max(1, ring - num(p.ringwidth, 5)) : num(p.distanceinner, 10)
-                const dOuter = ring ? ring * 2 : num(p.distanceouter, 100)
-                const sScale = expandVortexV2Ring ? 0.1 : 1
-                put4(f32, a, dInner, dOuter, num(p.speedinner, 100) * sScale, num(p.speedouter, 100) * sScale)
-                put4(f32, b, axis[0], axis[1], axis[2], Math.trunc(num(p.controlpoint)))
+                // a=(dInner,dOuter,sIn,sOut) b=(flags,cpIdx) c=(ringR,ringW,pullD) d=offset e=axis
+                // flags: bit0=infinite_axis bit1=maintain_distance_to_center（环语义）
+                put4(f32, a, num(p.distanceinner, 10), num(p.distanceouter, 100), num(p.speedinner, 100), num(p.speedouter, 100))
+                put4(f32, b, num(p.flags), Math.trunc(num(p.controlpoint)), 0, 0)
+                put4(f32, c, num(p.ringradius), num(p.ringwidth), num(p.ringpulldistance), 0)
+                put4(f32, d, offset[0], offset[1], offset[2], 0)
+                put4(f32, e, axis[0], axis[1], axis[2], 0)
                 break
             }
             case OperatorKind.ControlPointAttract: {
@@ -296,14 +295,6 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             }
         }
 
-        // vortex_v2 真展开：vortex 条目后再补一条 maintain（ringradius 为环半径，ringpulldistance 折算弹簧强度）
-        if (expandVortexV2Ring && operatorCount + 1 < MAX_OPERATORS) {
-            const o2 = OPERATORS_OFFSET / 4 + (operatorCount + 1) * (OPERATOR_STRIDE / 4)
-            u32[o2 + 0] = OperatorKind.MaintainDistanceToCP
-            put4(f32, o2 + 4, num(p.ringradius, 100), Math.max(0.5, num(p.ringpulldistance, 250) / 50), 0, 0)
-            put4(f32, o2 + 8, 0, 0, 0, Math.trunc(num(p.controlpoint)))
-            operatorCount++
-        }
         operatorCount++
     }
 

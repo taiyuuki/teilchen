@@ -44,6 +44,9 @@ export interface ControlPointDef {
     id:            number;
     flags:         number;
     offset:        Vec3;
+
+    /** 控制点欧拉角（弧度，ZYX 序）——WE 编辑器"控制点角度"，旋转 vortex 轴/attract 原点。 */
+    angles:        Vec3;
     lockToPointer: boolean;
 }
 
@@ -116,7 +119,8 @@ export function defaultControlPoints(): ControlPointDef[] {
     return Array.from({ length: MAX_CONTROL_POINTS }, (_, i) => ({
         id:            i,
         flags:         0,
-        offset:        [0, 0, 0],
+        offset:        [0, 0, 0] as Vec3,
+        angles:        [0, 0, 0] as Vec3,
         lockToPointer: false,
     }))
 }

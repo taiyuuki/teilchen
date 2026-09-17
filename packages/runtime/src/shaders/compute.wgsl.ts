@@ -23,8 +23,22 @@ struct Frame {
 struct SysUniform {
   origin: vec4f,                       // xyz: 层 origin
   pointer: vec4f,                      // xy: 鼠标世界坐标
-  controlPoints: array<vec4f, 8>,      // xyz: 世界坐标, w: angle
+  controlPoints: array<vec4f, 8>,      // xyz: 世界坐标
+  cpAngles: array<vec4f, 8>,           // xyz: 控制点欧拉角（弧度，ZYX 序）
 };
+
+/** 控制点旋转矩阵（Euler ZYX = Rz·Ry·Rx，与参考实现一致）。 */
+fn cpRot(i: u32) -> mat3x3f {
+  let a = sysUniform.cpAngles[i].xyz;
+  let cx = cos(a.x); let sx = sin(a.x);
+  let cy = cos(a.y); let sy = sin(a.y);
+  let cz = cos(a.z); let sz = sin(a.z);
+  return mat3x3f(
+    vec3f(cz * cy, sz * cy, -sy),
+    vec3f(cz * sy * sx - sz * cx, sz * sy * sx + cz * cx, cy * sx),
+    vec3f(cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx)
+  );
+}
 struct Counters {
   alive: atomic<u32>,
   renderCount: atomic<u32>,
@@ -467,26 +481,62 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
       let cn = select(vec3f(0.0), normalize(c), dot(c, c) > 1e-9);
       (*p).velocity += cn * op.c.rgb * speed * frame.dt;
     }
-    case 10u {  // vortex：切向速度场（把切向分量拉向目标速度，避免加速度语义的持续累积甩散）
-      let cpi = i32(op.b.w);
-      var center = sysUniform.origin.xyz;
-      if (cpi >= 0 && cpi < 8) { center = cp[u32(cpi)].xyz; }
-      let axial = normalize(op.b.rgb + vec3f(1e-6));
+    case 10u {  // vortex / vortex_v2：分段切向力 + 环拉力（open-wallpaper-engine 语义）
+      let cpi = clamp(i32(op.b.y), 0, 7);
+      let rot = cpRot(u32(cpi));
+      let center = cp[u32(cpi)].xyz + rot * op.d.rgb;
+      let axial = normalize(rot * op.e.rgb + vec3f(1e-6));
       let rel = (*p).simPos - center;
       let radial = rel - axial * dot(rel, axial);
-      let d = length(radial);
-      if (d > 0.001) {
-        let tt = clamp((d - op.a.x) / max(op.a.y - op.a.x, 1e-5), 0.0, 1.0);
-        let speed = mix(op.a.z, op.a.w, tt);
-        let tangent = normalize(cross(axial, radial));
-        let vT = dot((*p).velocity, tangent);
-        (*p).velocity += tangent * (speed - vT) * min(frame.dt * 2.0, 1.0);
+      let rd = length(radial);
+      if (rd > 1e-9) {
+        let tangent = -normalize(cross(axial, radial));
+        let dist = select(length(rel), rd, (u32(op.b.x) & 1u) != 0u);  // infinite_axis → 到轴距离
+        // 分段速度：inner 内 speedinner，[inner,outer] 线性混合，外 speedouter
+        var spd = op.a.w;
+        if (op.a.y - op.a.x < 0.0 || dist < op.a.x) { spd = op.a.z; }
+        else if (dist < op.a.y) { spd = mix(op.a.z, op.a.w, (dist - op.a.x) / (op.a.y - op.a.x + 0.1)); }
+
+        let ringR = op.c.x;
+        let ringW = op.c.y;
+        let pullD = op.c.z;
+        if (ringR <= 0.0 || ringW <= 0.0 || pullD <= 0.0) {
+          // 普通涡旋：切向加速度
+          (*p).velocity += tangent * spd * 0.5 * frame.dt;
+        } else if (length(normalize(radial) * ringR - rel) < pullD) {
+          // vortex_v2 环：环点 = 面内径向 × ringradius；超出拉力范围的粒子不动
+          let ringDelta = normalize(radial) * ringR - rel;
+          let ringDist = length(ringDelta);
+          var ringInf = 1.0;
+          var pullInf = 0.0;
+          var ringSpeed = op.a.w;
+          if (ringDist <= ringW) {
+            let amount = ringDist / ringW;
+            ringSpeed = mix(op.a.z, op.a.w, amount);
+            pullInf = amount;
+          } else {
+            pullInf = (ringDist - ringW) / max(pullD - ringW, 1e-9);
+            ringInf = sqrt(max(1.0 - pullInf, 0.0));
+          }
+          let ringStrength = ringSpeed * ringInf * 0.5;
+          var cur = (*p).velocity;
+          if ((u32(op.b.x) & 2u) != 0u) {
+            // maintain_distance_to_center：切向速度替换（保留轴向分量、丢弃面内径向 → 锁环）
+            let axisV = axial * dot(cur, axial);
+            let tanSpeed = dot(cur, tangent) + ringStrength * frame.dt;
+            cur = axisV + tangent * tanSpeed;
+          } else {
+            cur += tangent * ringStrength * frame.dt;
+          }
+          let pullStrength = abs(spd) * 0.5;
+          cur += normalize(ringDelta) * pullStrength * pullInf * frame.dt;
+          (*p).velocity = cur;
+        }
       }
     }
-    case 11u {  // controlpointattract：scale<0 远离控制点（cursor avoid），>0 吸引
-      let cpi = i32(op.b.w);
-      var center = op.b.rgb;
-      if (cpi >= 0 && cpi < 8) { center += cp[u32(cpi)].xyz; }
+    case 11u {  // controlpointattract：origin 受控制点旋转；scale<0 排斥，>0 吸引
+      let cpi = clamp(i32(op.b.w), 0, 7);
+      let center = cp[u32(cpi)].xyz + cpRot(u32(cpi)) * op.b.rgb;
       let dir = center - (*p).simPos;
       let d = length(dir);
       let th = op.a.y;
@@ -494,14 +544,21 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
         (*p).velocity += (dir / d) * op.a.x * frame.dt;
       }
     }
-    case 12u {  // maintaindistancetocontrolpoint：径向弹簧把粒子约束在目标距离环上
-      let cpi = i32(op.b.w);
-      var center = vec3f(0.0);
-      if (cpi >= 0 && cpi < 8) { center += cp[u32(cpi)].xyz; }
+    case 12u {  // maintaindistancetocontrolpoint：保持出生时到控制点的距离（径向速度替换）
+      let cpi = clamp(i32(op.b.w), 0, 7);
+      let center = cp[u32(cpi)].xyz;
       let dir = (*p).simPos - center;
       let d = length(dir);
-      if (d > 0.001) {
-        (*p).velocity += (dir / d) * (d - op.a.x) * op.a.y * frame.dt;
+      if (d > 1e-9) {
+        var d0 = bitcast<f32>((*p).instanceId);   // 出生距离存 instanceId 位（非子系统恒 INVALID）
+        if (!(d0 > 0.0)) {
+          d0 = d;
+          (*p).instanceId = bitcast<u32>(d);
+        }
+        let nd = dir / d;
+        let vr = dot((*p).velocity, nd);
+        let vt = (d0 - d) * op.a.y;
+        (*p).velocity += nd * (vt - vr);
       }
     }
     case 13u {  // boids：对齐/聚合/分离（小容量 O(N²)；容量护栏在 compile 侧）

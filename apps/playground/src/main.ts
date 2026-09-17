@@ -214,6 +214,12 @@ async function main(): Promise<void> {
         const defs = Array.isArray(result) ? result : [result]
         const asset = ex.asset ? await ex.asset() : await texFromMaterial(defs)
         runtime.setCamera(PRESET_CAMERA[id.startsWith('preset:') ? id.slice(7) : ''] ?? null)
+        const cpAngles = PRESET_CP_ANGLES[id.startsWith('preset:') ? id.slice(7) : '']
+        if (cpAngles) {
+            for (const def of defs) {
+                for (const [idx, angles] of Object.entries(cpAngles)) def.controlPoints[+idx].angles = angles
+            }
+        }
         for (const def of defs) {
             const childTextures = childTexByRoot.get(def)
             currentHandles.push(runtime.addSystem(def, { ...asset ? { texture: asset } : {}, ...childTextures ? { childTextures } : {} }))
@@ -223,6 +229,11 @@ async function main(): Promise<void> {
     // 3D 空间预设的透视相机（WE 预览场景的倾斜视角；其余预设走 2D 正交）
     const PRESET_CAMERA: Record<string, { eye: [number, number, number], target: [number, number, number], fov: number }> = {
         'magic_vortex_orb': { eye: [0, -620, 540], target: [0, 0, 0], fov: 50 },
+    }
+
+    // 控制点角度（WE 编辑器"控制点角度"，随场景实例保存）：{ 预设: { cpIdx: [x,y,z] 弧度 } }
+    const PRESET_CP_ANGLES: Record<string, Record<number, [number, number, number]>> = {
+        'magic_vortex_orb': { 1: [0, 0.9, 0.5] },
     }
 
     /** 材质里第一个贴图路径（如 "particle/fire/fire1"）→ /we/tex/<path>.tex 解码。 */
