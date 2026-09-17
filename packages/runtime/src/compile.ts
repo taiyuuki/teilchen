@@ -127,9 +127,11 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
         }
         else if (kind === InitializerKind.TurbulentVelocityRandom) {
 
-            // a=(scale, speedmin, speedmax, timescale)  b=(phasemax, offset, -, -)
-            put4(f32, o + 4, num(p.scale, 0.2), num(p.speedmin, 0), num(p.speedmax, 100), num(p.timescale, 0))
-            put4(f32, o + 8, num(p.phasemax, 0), num(p.offset, 0), 0, 0)
+            // WE 语义：噪声方向钳制在 forward（默认 +Y 向上）周围 scale/2·π 的圆锥内，
+            // 再绕 right（默认 +Z）旋转 offset，×speed 累加到初速度
+            const fwd = vec(p.forward, [0, 1, 0])
+            put4(f32, o + 4, num(p.speedmin, 0), num(p.speedmax, 100), num(p.scale, 0.2), num(p.offset, 0))
+            put4(f32, o + 8, fwd[0], fwd[1], fwd[2], 0)
         }
         else if (kind === InitializerKind.HsvColorRandom) {
 

@@ -276,9 +276,29 @@ fn applyInitializer(p: ptr<function, Particle>, ini: IniGpu, seq: u32, k: u32) {
     case 4u { (*p).velocity = mix(ini.a.rgb, ini.b.rgb, vec3f(pow(clamp(r, 0.0, 1.0), ini.a.w))); }
     case 5u { (*p).rotation = mix(ini.a.rgb, ini.b.rgb, vec3f(pow(clamp(r, 0.0, 1.0), ini.a.w))); }
     case 6u { (*p).angularVelocity = mix(ini.a.rgb, ini.b.rgb, vec3f(pow(clamp(r, 0.0, 1.0), ini.a.w))); }
-    case 7u {                                                                 // turbulentvelocityrandom（近似 WE）
-      let sp = mixExp(ini.a.y, ini.a.z, 1.0, r) + ini.b.y;
-      let dir = curlNoise((*p).position * ini.a.x, ini.b.x + r * 6.28);
+    case 7u {                                                                 // turbulentvelocityrandom（WE：forward 圆锥钳制）
+      let sp = mixExp(ini.a.x, ini.a.y, 1.0, r);
+      let noisePos = vec3f(rnd(seq, 50u), rnd(seq, 51u), rnd(seq, 52u)) * 10.0;
+      var dir = normalize(curlNoise(noisePos, ini.b.x) + vec3f(1e-6, 1e-6, 1e-6));
+      let fwd = normalize(ini.b.rgb);
+      let cosA = clamp(dot(dir, fwd), -1.0, 1.0);
+      let ang = acos(cosA);
+      let cone = clamp(ini.a.z, 0.0, 1.0) * 0.5 * 3.14159265;
+      if (ang > cone) {
+        let ax = cross(dir, fwd);
+        if (dot(ax, ax) > 1e-9) {
+          // Rodrigues：绕 cross(dir,fwd) 正向旋转 (ang-cone) 把方向拉到锥面
+          let k = normalize(ax);
+          let a2 = ang - cone;
+          dir = dir * cos(a2) + cross(k, dir) * sin(a2) + k * dot(k, dir) * (1.0 - cos(a2));
+        } else { dir = fwd; }
+      }
+      // offset：绕 right（默认 +Z）旋转
+      let a3 = ini.a.w;
+      if (abs(a3) > 1e-9) {
+        let k = vec3f(0.0, 0.0, 1.0);
+        dir = dir * cos(a3) + cross(k, dir) * sin(a3) + k * dot(k, dir) * (1.0 - cos(a3));
+      }
       (*p).velocity += dir * sp;
     }
     case 8u {                                                                 // hsvcolorrandom（hue/sat/val 各自随机）

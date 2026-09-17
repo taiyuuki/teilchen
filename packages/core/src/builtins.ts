@@ -137,10 +137,11 @@ export function registerBuiltins(): void {
         name:   'turbulentvelocityrandom',
         label:  'Turbulent Velocity Random',
         params: [
-            { key: 'scale', label: 'Noise Scale', type: 'float', default: 0.2 },
+            { key: 'scale', label: 'Cone Scale（半锥角比例 0-1）', type: 'float', default: 0.2 },
             { key: 'speedmin', label: 'Speed Min', type: 'float', default: 0 },
             { key: 'speedmax', label: 'Speed Max', type: 'float', default: 100 },
-            { key: 'offset', label: 'Offset', type: 'float', default: 0 },
+            { key: 'offset', label: 'Offset（绕 right 旋转）', type: 'float', default: 0 },
+            { key: 'forward', label: 'Forward', type: 'vec3', default: [0, 1, 0] },
             { key: 'phasemax', label: 'Phase Max', type: 'float', default: 0 },
             { key: 'timescale', label: 'Time Scale', type: 'float', default: 0 },
         ],

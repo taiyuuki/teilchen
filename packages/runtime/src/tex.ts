@@ -230,11 +230,17 @@ export function parseTex(input: ArrayBuffer | Uint8Array): TexImage {
             const [sw, sh] = dims
             const width = Math.hypot(xAxis[0], xAxis[1])
             const height = Math.hypot(yAxis[0], yAxis[1])
+
+            // 半像素内缩：图集相邻帧的 bilinear 渗色会在帧边缘产生淡框
+            const hU = 0.5 / Math.max(1, width)
+            const hV = 0.5 / Math.max(1, height)
+            const xa: [number, number] = [xAxis[0] / sw, xAxis[1] / sw]
+            const ya: [number, number] = [yAxis[0] / sh, yAxis[1] / sh]
             frames.push({
-                x:     fx / sw,
-                y:     fy / sh,
-                xAxis: [xAxis[0] / sw, xAxis[1] / sw],
-                yAxis: [yAxis[0] / sh, yAxis[1] / sh],
+                x:     fx / sw + xa[0] * hU + ya[0] * hV,
+                y:     fy / sh + xa[1] * hU + ya[1] * hV,
+                xAxis: [xa[0] * (1 - 2 * hU), xa[1] * (1 - 2 * hU)],
+                yAxis: [ya[0] * (1 - 2 * hV), ya[1] * (1 - 2 * hV)],
                 frametime,
                 width,
                 height,
