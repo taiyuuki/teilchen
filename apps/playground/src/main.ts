@@ -188,7 +188,7 @@ async function loadTex(url: string): Promise<TextureAsset | null> {
         // 同路径 .tex.json 描述（WE 的 .tex-json）：声明 rg88/r8 的 alphachannelpriority 等语义
         let alphaPriority = true
         try {
-            const desc = await fetch(`${url}.json`).then(r => (r.ok ? r.json() : null))
+            const desc = await fetch(`${url}.json`).then(r => r.ok ? r.json() : null)
             if (desc && typeof desc.alphachannelpriority === 'boolean') alphaPriority = desc.alphachannelpriority
         }
         catch { /* 描述缺失按默认 */ }
@@ -252,20 +252,19 @@ async function main(): Promise<void> {
 
     // 3D 空间预设的透视相机（WE 预览场景的倾斜视角；其余预设走 2D 正交）
     // vortex_orb：WE 预览中环（512 世界单位）占满 256 视高 → 相机拉近到环径约占屏高 90%
-    const PRESET_CAMERA: Record<string, { eye: [number, number, number], target: [number, number, number], fov: number }> = {
-        'magic_vortex_orb': { eye: [0, -360, 315], target: [0, 0, 0], fov: 50 },
-    }
+    const PRESET_CAMERA: Record<string, { eye: [number, number, number], target: [number, number, number], fov: number }> = { magic_vortex_orb: { eye: [0, -360, 315], target: [0, 0, 0], fov: 50 } }
 
     // 控制点角度（WE 编辑器"控制点角度"，随场景实例保存）：{ 预设: { cpIdx: [x,y,z] 弧度 } }
     const PRESET_CP_ANGLES: Record<string, Record<number, [number, number, number]>> = {}
 
     // 控制点角度动画驱动器（WE previewvortexorb 的 controlpointangle1：y 通道 3s 循环进动）
     const PRESET_CP_ANGLE_DRIVERS: Record<string, { index: number, fn: (t: number) => [number, number, number] }> = {
-        'magic_vortex_orb': {
+        magic_vortex_orb: {
             index: 1,
-            fn:  t => {
-                const y0 = -0.62831855, y1 = -6.9710331
-                const ph = (t / 3) % 1
+            fn:    t => {
+                const y0 = -0.62831855, 
+                    y1 = -6.9710331
+                const ph = t / 3 % 1
 
                 return [2.4783676, y0 + (y1 - y0) * ph, 0.022130774]
             },
@@ -273,9 +272,7 @@ async function main(): Promise<void> {
     }
 
     // 实例覆盖（WE instanceoverride）：size 缩放初始粒子尺寸
-    const PRESET_INSTANCE: Record<string, { size?: number }> = {
-        'magic_vortex_orb': { size: 0.36 },
-    }
+    const PRESET_INSTANCE: Record<string, { size?: number }> = { magic_vortex_orb: { size: 0.36 } }
 
     /** 材质里第一个贴图路径（如 "particle/fire/fire1"）→ /we/tex/<path>.tex 解码。 */
     async function texFromMaterial(defs: ParticleSystemDef[]): Promise<TextureAsset | null> {

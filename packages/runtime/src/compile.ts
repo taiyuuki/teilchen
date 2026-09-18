@@ -214,11 +214,13 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
                 break
             }
             case OperatorKind.AlphaFade:
+
                 // WE：fadeintime/fadeouttime 为寿命归一化进度 [0,1]（默认各 0.5）
                 put4(f32, a, num(p.fadeintime, 0.5), num(p.fadeouttime, 0.5), 0, 0)
                 break
             case OperatorKind.AlphaChange:
             case OperatorKind.SizeChange:
+
                 // WE ValueChange 默认：starttime 0 / endtime 1 / startvalue 1 / endvalue 0
                 put4(f32, a, num(p.starttime), num(p.endtime, 1), num(p.startvalue, 1), num(p.endvalue))
                 break
@@ -231,11 +233,13 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
                 break
             }
             case OperatorKind.OscillateAlpha:
+
                 // WE FrequencyValue 默认：freq 0-10、scale 0-1、phase 0-τ（振荡 scale 用于 alpha/size）
                 put4(f32, a, num(p.frequencymin), num(p.frequencymax, 10), num(p.scalemin), num(p.scalemax, 1))
                 put4(f32, b, num(p.phasemin), num(p.phasemax, TAU), 0, 0)
                 break
             case OperatorKind.OscillateSize:
+
                 // oscillatesize 的 scale 默认 0.8-1.2（绕初始值脉动）
                 put4(f32, a, num(p.frequencymin), num(p.frequencymax, 10), num(p.scalemin, 0.8), num(p.scalemax, 1.2))
                 put4(f32, b, num(p.phasemin), num(p.phasemax, TAU), 0, 0)
@@ -338,7 +342,7 @@ export function compileRenderer(def: ParticleSystemDef): CompiledRenderer {
     //     ropetrail length = 拖尾时长（秒），采样间隔 = length/segments
     //     （segments 引擎内部默认参考实现估 4，观感偏折线；取 8 平滑曲线，显式声明不受影响）
     const segments = mode === 2 ? Math.min(MAX_TRAIL_SEGMENTS, Math.max(2, Math.trunc(num(r.segments)) || 8)) : 0
-    const length = (mode === 1 || mode === 2) ? Math.max(0.001, num(r.length, 0.05)) : 0
+    const length = mode === 1 || mode === 2 ? Math.max(0.001, num(r.length, 0.05)) : 0
     const maxlength = mode === 1 ? Math.max(0.01, num(r.maxlength, 10)) : 0
     const interval = mode === 2 ? Math.max(1e-3, length / Math.max(segments, 1)) : 0
 

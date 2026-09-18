@@ -92,126 +92,126 @@ function startResize(e: PointerEvent): void {
       class="panel props"
       :style="{ width: `${panelWidth}px` }"
     >
-    <!-- 系统级属性 -->
-    <template v-if="editor.selected.kind === 'system'">
-      <h2>系统 System</h2>
-      <div class="param">
-        <label>名称</label><input
-          v-model="editor.def.name"
-          type="text"
-          spellcheck="false"
-        >
-      </div>
-      <div class="param">
-        <label>Max Count</label><input
-          v-model.number="editor.def.maxCount"
-          type="number"
-        >
-      </div>
-      <div class="param">
-        <label>Start Time（预热）</label><input
-          v-model.number="editor.def.startTime"
-          type="number"
-          step="0.5"
-          min="0"
-        >
-      </div>
-      <div class="param">
-        <label>混合 Blending</label>
-        <select v-model="editor.def.material.blending">
-          <option
-            v-for="b in blendings"
-            :key="b"
-            :value="b"
+      <!-- 系统级属性 -->
+      <template v-if="editor.selected.kind === 'system'">
+        <h2>系统 System</h2>
+        <div class="param">
+          <label>名称</label><input
+            v-model="editor.def.name"
+            type="text"
+            spellcheck="false"
           >
-            {{ b }}
-          </option>
-        </select>
-      </div>
-      <div class="param">
-        <label title="颜色混合 BlendMode（colorBlendMode）">颜色混合</label>
-        <select v-model="editor.def.material.colorBlendMode">
-          <option
-            v-for="m in COLOR_BLEND_MODES"
-            :key="m.value"
-            :value="m.value"
-          >
-            {{ m.value }} · {{ m.label }}
-          </option>
-        </select>
-      </div>
-      <div class="param">
-        <label>原点 Origin</label>
-        <div class="vec3">
-          <span
-            v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
-            :key="axis"
-            class="axis"
-          >
-            <em>{{ axis }}</em><input
-              type="number"
-              step="any"
-              :value="editor.def.origin[i]"
-              @input="setOrigin(i, $event)"
-            >
-          </span>
         </div>
-      </div>
-
-      <h2>控制点 Control Points</h2>
-      <p class="tip">
-        lock = 跟随鼠标（WE locktopointer）
-      </p>
-      <div
-        v-for="(cp, i) in editor.def.controlPoints"
-        :key="i"
-        class="cp-row"
-      >
-        <span class="cp-id">cp{{ i }}</span>
-        <label class="cp-lock"><input
-          v-model="cp.lockToPointer"
-          type="checkbox"
-        >lock</label>
-        <div class="vec3">
-          <span
-            v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
-            :key="axis"
-            class="axis"
+        <div class="param">
+          <label>Max Count</label><input
+            v-model.number="editor.def.maxCount"
+            type="number"
           >
-            <em>{{ axis }}</em><input
-              type="number"
-              step="any"
-              :value="cp.offset[j]"
-              @input="setCpOffset(i, j, $event)"
-            >
-          </span>
         </div>
-      </div>
-    </template>
+        <div class="param">
+          <label>Start Time（预热）</label><input
+            v-model.number="editor.def.startTime"
+            type="number"
+            step="0.5"
+            min="0"
+          >
+        </div>
+        <div class="param">
+          <label>混合 Blending</label>
+          <select v-model="editor.def.material.blending">
+            <option
+              v-for="b in blendings"
+              :key="b"
+              :value="b"
+            >
+              {{ b }}
+            </option>
+          </select>
+        </div>
+        <div class="param">
+          <label title="颜色混合 BlendMode（colorBlendMode）">颜色混合</label>
+          <select v-model="editor.def.material.colorBlendMode">
+            <option
+              v-for="m in COLOR_BLEND_MODES"
+              :key="m.value"
+              :value="m.value"
+            >
+              {{ m.value }} · {{ m.label }}
+            </option>
+          </select>
+        </div>
+        <div class="param">
+          <label>原点 Origin</label>
+          <div class="vec3">
+            <span
+              v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
+              :key="axis"
+              class="axis"
+            >
+              <em>{{ axis }}</em><input
+                type="number"
+                step="any"
+                :value="editor.def.origin[i]"
+                @input="setOrigin(i, $event)"
+              >
+            </span>
+          </div>
+        </div>
 
-    <!-- 模块属性（注册表驱动） -->
-    <template v-else-if="selectedModule && spec">
-      <h2>{{ kindLabels[selectedModule.kind] }} <code>{{ selectedModule.mod.name }}</code></h2>
-      <p
-        v-if="spec.description"
-        class="tip"
-      >
-        {{ spec.description }}
-      </p>
-      <ParamControl
-        v-for="p in spec.params"
-        :key="p.key"
-        v-model="selectedModule.mod[p.key]"
-        :spec="p"
-      />
-    </template>
+        <h2>控制点 Control Points</h2>
+        <p class="tip">
+          lock = 跟随鼠标（WE locktopointer）
+        </p>
+        <div
+          v-for="(cp, i) in editor.def.controlPoints"
+          :key="i"
+          class="cp-row"
+        >
+          <span class="cp-id">cp{{ i }}</span>
+          <label class="cp-lock"><input
+            v-model="cp.lockToPointer"
+            type="checkbox"
+          >lock</label>
+          <div class="vec3">
+            <span
+              v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+              :key="axis"
+              class="axis"
+            >
+              <em>{{ axis }}</em><input
+                type="number"
+                step="any"
+                :value="cp.offset[j]"
+                @input="setCpOffset(i, j, $event)"
+              >
+            </span>
+          </div>
+        </div>
+      </template>
 
-    <template v-else>
-      <h2>{{ selectedModule ? kindLabels[selectedModule.kind] : '属性' }}</h2>
-      <p class="tip">
-        未注册的模块 "{{ selectedModule?.mod.name }}"：字段保留（兼容 WE round-trip），但无参数面板。
-      </p>
-    </template>
-  </aside>
+      <!-- 模块属性（注册表驱动） -->
+      <template v-else-if="selectedModule && spec">
+        <h2>{{ kindLabels[selectedModule.kind] }} <code>{{ selectedModule.mod.name }}</code></h2>
+        <p
+          v-if="spec.description"
+          class="tip"
+        >
+          {{ spec.description }}
+        </p>
+        <ParamControl
+          v-for="p in spec.params"
+          :key="p.key"
+          v-model="selectedModule.mod[p.key]"
+          :spec="p"
+        />
+      </template>
+
+      <template v-else>
+        <h2>{{ selectedModule ? kindLabels[selectedModule.kind] : '属性' }}</h2>
+        <p class="tip">
+          未注册的模块 "{{ selectedModule?.mod.name }}"：字段保留（兼容 WE round-trip），但无参数面板。
+        </p>
+      </template>
+    </aside>
   </div>
 </template>

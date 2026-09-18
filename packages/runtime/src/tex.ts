@@ -278,7 +278,8 @@ export function parseTex(input: ArrayBuffer | Uint8Array, alphaChannelPriority =
                 if (p.length < width * height * 2) throw new Error('tex: RG88 数据不足')
                 rgba = new Uint8Array(width * height * 4)
                 for (let i = 0, j = 0; i < width * height; i++, j += 4) {
-                    const b0 = p[i * 2]!, b1 = p[i * 2 + 1]!
+                    const b0 = p[i * 2]!, 
+                        b1 = p[i * 2 + 1]!
                     if (alphaChannelPriority) {
                         rgba[j] = rgba[j + 1] = rgba[j + 2] = b1
                         rgba[j + 3] = b0

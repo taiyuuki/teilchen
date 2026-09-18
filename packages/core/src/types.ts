@@ -41,9 +41,9 @@ export interface MaterialDef {
 }
 
 export interface ControlPointDef {
-    id:            number;
-    flags:         number;
-    offset:        Vec3;
+    id:     number;
+    flags:  number;
+    offset: Vec3;
 
     /** 控制点欧拉角（弧度，ZYX 序）——WE 编辑器"控制点角度"，旋转 vortex 轴/attract 原点。 */
     angles:        Vec3;

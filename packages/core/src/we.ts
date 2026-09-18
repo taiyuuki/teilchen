@@ -47,6 +47,7 @@ export function parseWeParticleJson(
         const combos = pass.combos as Record<string, unknown> | undefined
         if (combos && Number(combos.REFRACT ?? 0) > 0) {
             def.material.refract = true
+
             // 纯折射：基色 util/white + 法线贴图，WE 中只扭曲背景、无可视粒子，近似渲染只会是白色巨块
             if (def.material.textures[0] === 'util/white') {
                 def.material.refractOnly = true
@@ -251,7 +252,8 @@ export function applyChildLayerTransform(def: ParticleSystemDef, origin: Vec3, s
     // 保持形状的缩放：vec3 逐维缩放；标量（sphererandom 的半径等）按均匀缩放；缺省按 fallback
     const sv = (v: Vec3 | number | undefined, fallback: Vec3 | number = [0, 0, 0]): Vec3 | number => {
         if (typeof v === 'number') return v * uniform
-        const src = Array.isArray(v) ? v : (Array.isArray(fallback) ? fallback : [fallback, fallback, fallback])
+        const src = Array.isArray(v) ? v : Array.isArray(fallback) ? fallback : [fallback, fallback, fallback]
+
         return [src[0] * scale[0], src[1] * scale[1], src[2] * scale[2]]
     }
     const sf = (n: number): number => n * uniform

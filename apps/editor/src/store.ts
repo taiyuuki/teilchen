@@ -77,7 +77,7 @@ export function getRuntime(): ParticleRuntime | null {
 
 // 调试/自动化句柄（与 playground 的 __teilchen 同职责）
 if (typeof window !== 'undefined') {
-    ;(window as unknown as Record<string, unknown>).__ed = { getRuntime, get editor() { return editor } }
+    (window as unknown as Record<string, unknown>).__ed = { getRuntime, get editor() { return editor } }
 }
 
 function pollStats(): void {

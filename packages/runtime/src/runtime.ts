@@ -828,8 +828,9 @@ export class ParticleRuntime {
 
     /** 暂停时单步一帧（固定 1/60s × 速度倍率）。 */
     step(): void {
-        const dt = (1 / 60) * this.speedMul
+        const dt = 1 / 60 * this.speedMul
         this.simTime += dt
+
         // cpAngleDriver 由 renderFrame 内逐系统应用
         this.renderFrame(dt, true)
         this.sampleStats(performance.now())
@@ -890,6 +891,7 @@ export class ParticleRuntime {
         }
 
         if (this.playing) this.simTime += dt
+
         // cpAngleDriver 由 renderFrame 内逐系统应用
         this.renderFrame(dt, this.playing)
         this.sampleStats(now)
@@ -1060,19 +1062,27 @@ export class ParticleRuntime {
 
             // 透视：view(lookAt) × perspective，列主序写 vp；camRight/camUp 供面向相机的 quad 轴
             const { eye, target, up, fov } = this.camera
-            const zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2]
+            const zx = eye[0] - target[0], 
+                zy = eye[1] - target[1], 
+                zz = eye[2] - target[2]
             const zl = Math.hypot(zx, zy, zz) || 1
             const z = [zx / zl, zy / zl, zz / zl] as Vec3
-            const xx = up[1] * z[2] - up[2] * z[1], xy = up[2] * z[0] - up[0] * z[2], xz = up[0] * z[1] - up[1] * z[0]
+            const xx = up[1] * z[2] - up[2] * z[1], 
+                xy = up[2] * z[0] - up[0] * z[2], 
+                xz = up[0] * z[1] - up[1] * z[0]
             const xl = Math.hypot(xx, xy, xz) || 1
             const x = [xx / xl, xy / xl, xz / xl] as Vec3
             const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]] as Vec3
             const aspect = this.canvas.width / Math.max(1, this.canvas.height)
-            const t = Math.tan((fov * Math.PI) / 180 / 2)
-            const near = 1, far = 100000
-            const tf = near * t, nf = 1 / (near - far)
+            const t = Math.tan(fov * Math.PI / 180 / 2)
+            const near = 1, 
+                far = 100000
+            const tf = near * t, 
+                nf = 1 / (near - far)
+
             // perspective（行主序推导，按列写出）
             const p = [tf / aspect, 0, 0, 0, 0, tf, 0, 0, 0, 0, far * nf, -1, 0, 0, 2 * far * near * nf, 0]
+
             // view = [x|y|z]^T 平移
             const v = [
                 x[0], y[0], z[0], 0,
@@ -1082,13 +1092,12 @@ export class ParticleRuntime {
                 -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
                 -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]), 1,
             ]
+
             // vp = p × v（投影作用于视图坐标；列主序 4×4 乘法）
             const vp = new Array(16).fill(0)
-            for (let c = 0; c < 4; c++)
-                for (let r = 0; r < 4; r++)
-                    vp[c * 4 + r] = p[r] * v[c * 4] + p[4 + r] * v[c * 4 + 1] + p[8 + r] * v[c * 4 + 2] + p[12 + r] * v[c * 4 + 3]
+            for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) vp[c * 4 + r] = p[r] * v[c * 4] + p[4 + r] * v[c * 4 + 1] + p[8 + r] * v[c * 4 + 2] + p[12 + r] * v[c * 4 + 3]
             f.set(vp, 4)
-            f.set([eye[0], eye[1], eye[2], (this.canvas.height / 2) / t], 20)
+            f.set([eye[0], eye[1], eye[2], this.canvas.height / 2 / t], 20)
             f.set([x[0], x[1], x[2], 1], 24) // camRight + persp 标志
             f.set([y[0], y[1], y[2], 0], 28) // camUp
         }
