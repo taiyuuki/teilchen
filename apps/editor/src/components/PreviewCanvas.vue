@@ -22,7 +22,10 @@ function onPointerMove(e: PointerEvent): void {
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
     rt?.setPointer(x, y)
-    editor.pointer = [x - rect.width / 2, rect.height / 2 - y]
+
+    // runtime 世界坐标 = 设备像素（canvas 背板 = CSS × DPR），overlay 绘制用同一坐标系
+    const dpr = gpuCanvas.value!.width / Math.max(1, gpuCanvas.value!.clientWidth)
+    editor.pointer = [(x - rect.width / 2) * dpr, (rect.height / 2 - y) * dpr]
 }
 
 /** 2D overlay：emitter 范围线框 + controlpoint 十字 + 指针（世界系与 runtime 一致）。 */
@@ -40,7 +43,10 @@ function drawGizmos(): void {
         if (editor.gizmos && editor.runtimeReady) {
             const def = editor.def
             const origin = def.origin
-            const toScreen = (x: number, y: number): [number, number] => [w / 2 + x, h / 2 - y]
+
+            // 世界（设备像素）→ overlay（CSS 像素）：除以 DPR，与 runtime 渲染一致
+            const dpr = gpuCanvas.value ? gpuCanvas.value.width / Math.max(1, gpuCanvas.value.clientWidth) : 1
+            const toScreen = (x: number, y: number): [number, number] => [w / 2 + x / dpr, h / 2 - y / dpr]
 
             // emitter 范围
             ctx.lineWidth = 1
