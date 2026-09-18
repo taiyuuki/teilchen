@@ -15,6 +15,10 @@
     "@types/web": "catalog:",
     "@webgpu/types": "catalog:",
     "eslint": "catalog:",
+    "esno": "catalog:",
+    "rimraf": "catalog:",
+    "rolldown": "catalog:",
+    "rolldown-plugin-dts": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:"
   }

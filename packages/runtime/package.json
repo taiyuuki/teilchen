@@ -1,11 +1,30 @@
 {
   "name": "@teilchen/runtime",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "scripts": {
+    "build": "pnpm run clean && rolldown -c",
+    "clean": "rimraf dist"
+  },
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "author": "taiyuuki <taiyuuki@qq.com>",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@teilchen/core": "workspace:*"
   },
