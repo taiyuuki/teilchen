@@ -113,16 +113,25 @@ function gizmoGeometry() {
             if (th > 0) circles.push({ kind: 'threshold', cpIndex: g.i, opIndex, cx: g.x + off[0], cy: g.y + off[1], r: th })
         }
     })
+
+    /** 发射器世界中心，与 GPU emitOne 同语义：em.origin + 绑定控制点位置（cp<0 时不叠加）。 */
+    const emitterCenter = (em: Record<string, unknown>): { cx: number, cy: number } => {
+        const o = asVec3(em.origin)
+        const cpi = Math.trunc(Number(em.controlpoint))
+        if (!(cpi >= 0 && cpi <= 7) || !allCps[cpi]) return { cx: o[0], cy: o[1] }
+
+        return { cx: o[0] + allCps[cpi].x, cy: o[1] + allCps[cpi].y }
+    }
     def.emitters.forEach((em, emitterIndex) => {
         if (em.name !== 'sphererandom') return
-        const o = asVec3(em.origin)
+        const { cx, cy } = emitterCenter(em)
         const mn = scalarOf(em.distancemin)
         const mx = scalarOf(em.distancemax)
-        if (mn > 0) circles.push({ kind: 'sphere-min', emitterIndex, cx: origin[0] + o[0], cy: origin[1] + o[1], r: mn })
-        if (mx > 0) circles.push({ kind: 'sphere-max', emitterIndex, cx: origin[0] + o[0], cy: origin[1] + o[1], r: mx })
+        if (mn > 0) circles.push({ kind: 'sphere-min', emitterIndex, cx, cy, r: mn })
+        if (mx > 0) circles.push({ kind: 'sphere-max', emitterIndex, cx, cy, r: mx })
     })
 
-    return { origin, cps, circles }
+    return { origin, cps, allCps, emitterCenter, circles }
 }
 
 // ---------------------------------------------------------------- 指针与拖拽
@@ -205,8 +214,7 @@ function applyDrag(e: PointerEvent): void {
     }
     else if (d.kind === 'sphere') {
         const em = def.emitters[d.emitterIndex]
-        const o = asVec3(em.origin)
-        const r = Math.hypot(wx - def.origin[0] - o[0], wy - def.origin[1] - o[1])
+        const r = Math.hypot(wx - d.center[0], wy - d.center[1])
         em[d.which === 'min' ? 'distancemin' : 'distancemax'] = Math.round(r * 10) / 10
     }
     else {
@@ -246,11 +254,9 @@ function drawGizmos(): void {
             ctx.setLineDash([4, 3])
             for (const em of editor.def.emitters) {
                 if (em.name !== 'boxrandom') continue
-                const o = asVec3(em.origin)
                 const mn = asVec3(em.distancemin)
                 const mx = asVec3(em.distancemax)
-                const cx = geo.origin[0] + o[0]
-                const cy = geo.origin[1] + o[1]
+                const { cx, cy } = geo.emitterCenter(em)
                 const [sx1, sy1] = toScreen(cx + mn[0], cy + mx[1])
                 const [sx2, sy2] = toScreen(cx + mx[0], cy + mn[1])
                 ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1)
