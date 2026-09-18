@@ -43,8 +43,11 @@ async function onTextureFile(e: Event): Promise<void> {
 
 async function onTexFile(e: Event): Promise<void> {
     const input = e.target as HTMLInputElement
-    const file = input.files?.[0]
-    if (file) await setTexture('tex', file)
+    const files = Array.from(input.files ?? [])
+    const isDesc = (f: File) => f.name.toLowerCase().endsWith('.json') || f.name.toLowerCase().endsWith('.tex-json')
+    const tex = files.find(f => !isDesc(f))
+    const desc = files.find(f => isDesc(f))
+    if (tex) await setTexture('tex', tex, desc)
     input.value = ''
 }
 </script>
@@ -110,7 +113,8 @@ async function onTexFile(e: Event): Promise<void> {
     <input
       ref="texFile"
       type="file"
-      accept=".tex"
+      accept=".tex,.tex-json,.json"
+      multiple
       hidden
       @change="onTexFile"
     >

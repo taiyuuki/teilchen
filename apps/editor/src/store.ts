@@ -204,7 +204,7 @@ export function exportWeJson(): void {
 
 export type TextureChoice = 'halo' | 'tex' | 'upload' | 'white'
 
-export async function setTexture(name: TextureChoice, file?: File): Promise<void> {
+export async function setTexture(name: TextureChoice, file?: File, descriptorFile?: File): Promise<void> {
     if (!runtime || !handle) return
     let tex: GPUTexture | TextureAsset
     if (name === 'halo') {
@@ -215,8 +215,20 @@ export async function setTexture(name: TextureChoice, file?: File): Promise<void
     }
     else if (name === 'tex') {
         if (!file) return
+
+        // 同名 .tex.json 描述（WE 的 .tex-json）：rg88/r8 的 alphachannelpriority 通道语义
+        let alphaPriority = true
+        if (descriptorFile) {
+            try {
+                const desc = JSON.parse(await descriptorFile.text())
+                if (typeof desc.alphachannelpriority === 'boolean') alphaPriority = desc.alphachannelpriority
+            }
+            catch(err) {
+                pushWarning(`.tex.json 描述解析失败: ${(err as Error).message}，按默认通道语义`)
+            }
+        }
         try {
-            tex = await createTextureFromTex(runtime.device, await file.arrayBuffer(), file.name)
+            tex = await createTextureFromTex(runtime.device, await file.arrayBuffer(), file.name, alphaPriority)
         }
         catch(err) {
             pushWarning(`.tex 解析失败: ${(err as Error).message}`)
