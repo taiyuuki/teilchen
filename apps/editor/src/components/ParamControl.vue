@@ -64,7 +64,7 @@ function onColor(e: Event): void {
     class="param"
     :data-type="spec.type"
   >
-    <label :title="spec.key">{{ spec.label }}</label>
+    <label :title="`${spec.label}（${spec.key}）`">{{ spec.label }}</label>
     <div
       v-if="spec.type === 'float' || spec.type === 'int'"
       class="scalar"

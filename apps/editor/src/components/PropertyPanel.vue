@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
     type BlendMode,
     COLOR_BLEND_MODES,
@@ -52,10 +52,46 @@ function setCpOffset(cpIndex: number, i: number, e: Event): void {
     v[i] = Number((e.target as HTMLInputElement).value) || 0
     editor.def.controlPoints[cpIndex].offset = v
 }
+
+const PANEL_MIN = 300
+const PANEL_MAX = 620
+
+const panelWidth = ref(Math.min(PANEL_MAX, Math.max(PANEL_MIN, Number(localStorage.getItem('teilchen.propsWidth')) || 360)))
+const resizing = ref(false)
+
+function startResize(e: PointerEvent): void {
+    const handle = e.currentTarget as HTMLElement
+    const startX = e.clientX
+    const startW = panelWidth.value
+    resizing.value = true
+    handle.setPointerCapture(e.pointerId)
+    document.body.style.cursor = 'col-resize'
+    const move = (ev: PointerEvent): void => {
+        panelWidth.value = Math.round(Math.min(PANEL_MAX, Math.max(PANEL_MIN, startW + (startX - ev.clientX))))
+    }
+    const up = (): void => {
+        handle.removeEventListener('pointermove', move)
+        document.body.style.cursor = ''
+        resizing.value = false
+        localStorage.setItem('teilchen.propsWidth', String(panelWidth.value))
+    }
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', up, { once: true })
+    handle.addEventListener('pointercancel', up, { once: true })
+}
 </script>
 
 <template>
-  <aside class="panel props">
+  <div class="props-wrap">
+    <div
+      class="resize-handle"
+      :class="{ dragging: resizing }"
+      @pointerdown="startResize"
+    />
+    <aside
+      class="panel props"
+      :style="{ width: `${panelWidth}px` }"
+    >
     <!-- 系统级属性 -->
     <template v-if="editor.selected.kind === 'system'">
       <h2>系统 System</h2>
@@ -93,7 +129,7 @@ function setCpOffset(cpIndex: number, i: number, e: Event): void {
         </select>
       </div>
       <div class="param">
-        <label>颜色混合 BlendMode</label>
+        <label title="颜色混合 BlendMode（colorBlendMode）">颜色混合</label>
         <select v-model="editor.def.material.colorBlendMode">
           <option
             v-for="m in COLOR_BLEND_MODES"
@@ -177,4 +213,5 @@ function setCpOffset(cpIndex: number, i: number, e: Event): void {
       </p>
     </template>
   </aside>
+  </div>
 </template>

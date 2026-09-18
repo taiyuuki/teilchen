@@ -101,8 +101,17 @@ code { color: #8ab4ff; font-family: ui-monospace, monospace; font-size: 11px; }
 .timeline .spacer { flex: 1; }
 .gizmo-toggle { color: #7f8db0; display: flex; align-items: center; gap: 4px; cursor: pointer; }
 
-/* 右：属性面板 */
-.props { width: 300px; border-left: 1px solid rgba(120, 140, 200, 0.18); padding: 12px; }
+/* 右：属性面板（左缘可拖拽调宽） */
+.props-wrap { position: relative; display: flex; flex: none; }
+.props {
+  width: 360px; min-width: 300px; max-width: 620px;
+  border-left: 1px solid rgba(120, 140, 200, 0.18); padding: 12px;
+}
+.resize-handle {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 7px;
+  cursor: col-resize; z-index: 10;
+}
+.resize-handle:hover, .resize-handle.dragging { background: rgba(138, 180, 255, 0.28); }
 .props h2 { font-size: 12px; color: #8ab4ff; margin: 4px 0 10px; }
 .props h2 + .tip { margin-top: -6px; }
 .tip { color: #55628c; margin-bottom: 8px; }
@@ -110,20 +119,23 @@ code { color: #8ab4ff; font-family: ui-monospace, monospace; font-size: 11px; }
 .param { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
 .param > label { width: 110px; flex-shrink: 0; color: #8b98bd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .param > label::after { content: ''; }
-.param .scalar { display: flex; flex: 1; gap: 6px; align-items: center; }
-.param input[type='range'] { flex: 1; padding: 0; background: none; border: none; height: 18px; accent-color: #8ab4ff; }
-.param .num { width: 76px; }
-.param input[type='number'], .param input[type='text'], .param select { flex: 1; min-width: 0; }
-.vec3 { display: flex; gap: 4px; flex: 1; align-items: center; }
+.param .scalar { display: flex; flex: 1; gap: 6px; align-items: center; min-width: 0; }
+.param input[type='range'] { flex: 2 1 60px; min-width: 0; padding: 0; background: none; border: none; height: 18px; accent-color: #8ab4ff; }
+.param .num { min-width: 68px; }
+.param input[type='number'], .param input[type='text'], .param select { flex: 1; min-width: 0; appearance: textfield; -moz-appearance: textfield; }
+.param input[type='number']::-webkit-outer-spin-button,
+.param input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input:not([type='range']):not([type='checkbox']):hover { border-color: #8ab4ff; }
+.vec3 { display: flex; gap: 4px; flex: 1; align-items: center; min-width: 0; }
 .vec3 .axis { display: flex; align-items: center; gap: 2px; flex: 1; }
 .vec3 .axis em { font-style: normal; color: #55628c; font-size: 10px; width: 9px; }
-.vec3 .axis input { width: 100%; min-width: 0; padding: 3px 4px; }
+.vec3 .axis input { width: 100%; min-width: 36px; padding: 3px 4px; }
 .vec3.color .axis input { min-width: 30px; }
 .vec3 input[type='color'] { width: 30px; }
 
 .cp-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
-.cp-row .cp-id { font-family: ui-monospace, monospace; color: #7f8db0; width: 28px; }
-.cp-row .cp-lock { display: flex; gap: 3px; color: #8b98bd; cursor: pointer; white-space: nowrap; }
+.cp-row .cp-id { flex: none; font-family: ui-monospace, monospace; color: #7f8db0; width: 28px; }
+.cp-row .cp-lock { flex: none; display: flex; gap: 3px; color: #8b98bd; cursor: pointer; white-space: nowrap; }
 .cp-row .vec3 { flex: 1; }
 
 ::-webkit-scrollbar { width: 8px; }
