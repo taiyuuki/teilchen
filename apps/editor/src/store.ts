@@ -63,6 +63,9 @@ export const editor = reactive({
     warnings:     [] as string[],
     gizmos:       true,
     paused:       false,
+
+    /** gizmo 只显示活跃控制点（被引用/有偏移/锁定）；开启后显示全部 8 个。 */
+    showAllCps:   false,
     textureName:  'halo' as TextureChoice | 'tex-sprite',
     runtimeReady: false,
 

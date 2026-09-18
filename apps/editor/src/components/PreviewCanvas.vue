@@ -51,13 +51,26 @@ function view(): { w: number, h: number, dpr: number } {
     }
 }
 
-/** 收集 gizmo 几何：控制点位置（含 lock 跟随/自转进动）与可拖拽圆（vortex 环/attract 阈值/球发射半径）。 */
+/** 控制点是否「活跃」：被任意模块/子声明引用、有偏移/角度/自转、或锁定跟随。 */
+function isCpActive(def: typeof editor.def, i: number): boolean {
+    const cp = def.controlPoints[i]
+    if (!cp) return false
+    if (cp.lockToPointer) return true
+    if (cp.offset.some(v => v !== 0) || cp.angles.some(v => v !== 0) || cp.spin.some(v => v !== 0)) return true
+    const referenced = [def.emitters, def.initializers, def.operators].some(list =>
+        list.some(m => Object.keys(m).some(k => k.startsWith('controlpoint') && Number(m[k]) === i)))
+
+    return referenced || def.children.some(c => c.controlPointStartIndex === i)
+}
+
+/** 收集 gizmo 几何：控制点位置（含 lock 跟随/自转进动）与可拖拽圆（vortex 环/attract 阈值/球发射半径）。
+ *  默认只保留活跃控制点（showAllCps 展开）；allCps 始终按下标可查，供算子圆定位。 */
 function gizmoGeometry() {
     const def = editor.def
     const origin = def.origin
     const rt = getRuntime()
     const simT = rt?.time ?? 0
-    const cps = def.controlPoints.map((cp, i) => {
+    const allCps = def.controlPoints.map((cp, i) => {
         const ang: Vec3 = [
             cp.angles[0] + cp.spin[0] * simT,
             cp.angles[1] + cp.spin[1] * simT,
@@ -68,13 +81,15 @@ function gizmoGeometry() {
             i,
             ang,
             locked: cp.lockToPointer,
+            active: isCpActive(def, i),
             x:      origin[0] + cp.offset[0] + (cp.lockToPointer ? editor.pointer[0] : 0),
             y:      origin[1] + cp.offset[1] + (cp.lockToPointer ? editor.pointer[1] : 0),
         }
     })
+    const cps = allCps.filter(g => g.active || editor.showAllCps)
     const circles: GizmoCircle[] = []
     def.operators.forEach((op, opIndex) => {
-        const g = cps[Number(op.controlpoint) || 0]
+        const g = allCps[Number(op.controlpoint) || 0]
         if (!g) return
         const rot = cpRotMat(g.ang)
         if (op.name === 'vortex' || op.name === 'vortex_v2') {
@@ -285,25 +300,32 @@ function drawGizmos(): void {
                 ctx.stroke()
             }
 
-            // control points
+            // control points：十字先画，标签纵向避让（同位置的标签自上往下错开）
             ctx.font = '10px ui-monospace, monospace'
+            const labelSlot = new Map<number, number>()
             for (const g of geo.cps) {
-                const used = [editor.def.emitters, editor.def.operators].some(list =>
-                    list.some(m => Number(m.controlpoint) === g.i || Number(m.controlpointstart) === g.i))
-                const active = drag?.kind === 'cp' && drag.cpIndex === g.i
+                const dragging = drag?.kind === 'cp' && drag.cpIndex === g.i
                 const [sx, sy] = toScreen(g.x, g.y)
                 ctx.strokeStyle = g.locked
                     ? 'rgba(255, 210, 120, 0.95)'
-                    : active ? 'rgba(255, 160, 160, 1)' : used ? 'rgba(255, 130, 130, 0.9)' : 'rgba(255, 130, 130, 0.35)'
-                const arm = active ? 9 : 7
+                    : dragging ? 'rgba(255, 160, 160, 1)' : g.active ? 'rgba(255, 130, 130, 0.9)' : 'rgba(255, 130, 130, 0.3)'
+                const arm = dragging ? 9 : 7
                 ctx.beginPath()
                 ctx.moveTo(sx - arm, sy)
                 ctx.lineTo(sx + arm, sy)
                 ctx.moveTo(sx, sy - arm)
                 ctx.lineTo(sx, sy + arm)
                 ctx.stroke()
-                ctx.fillStyle = ctx.strokeStyle as string
-                ctx.fillText(`cp${g.i}${g.locked ? ' ⌨' : ''}`, sx + 9, sy - 6)
+            }
+            for (const g of [...geo.cps].sort((a, b) => a.i - b.i)) {
+                const [sx, sy] = toScreen(g.x, g.y)
+                const key = Math.round(sx / 8) * 4096 + Math.round(sy / 8)
+                const slot = labelSlot.get(key) ?? 0
+                labelSlot.set(key, slot + 1)
+                ctx.fillStyle = g.locked
+                    ? 'rgba(255, 210, 120, 0.95)'
+                    : g.active ? 'rgba(255, 130, 130, 0.9)' : 'rgba(255, 130, 130, 0.3)'
+                ctx.fillText(`cp${g.i}${g.locked ? ' ⌨' : ''}${g.active ? '' : ' ·'}`, sx + 9, sy - 6 - slot * 12)
             }
 
             // 指针
