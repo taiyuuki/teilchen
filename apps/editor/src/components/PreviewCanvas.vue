@@ -68,14 +68,21 @@ function drawGizmos(): void {
                     const mn = scalarOf(em.distancemin)
                     const mx = scalarOf(em.distancemax)
                     const [sx, sy] = toScreen(cx, cy)
+
+                    // 环带浅填充：出生区一眼可辨（稳态云会被操作符扩散到圈外/圈内）
                     if (mx > 0) {
                         ctx.beginPath()
-                        ctx.arc(sx, sy, mx, 0, Math.PI * 2)
+                        ctx.arc(sx, sy, mx / dpr, 0, Math.PI * 2)
+                        if (mn > 0) { ctx.arc(sx, sy, mn / dpr, 0, Math.PI * 2, true); }
+                        ctx.fillStyle = 'rgba(120, 200, 255, 0.07)'
+                        ctx.fill()
+                        ctx.beginPath()
+                        ctx.arc(sx, sy, mx / dpr, 0, Math.PI * 2)
                         ctx.stroke()
                     }
                     if (mn > 0) {
                         ctx.beginPath()
-                        ctx.arc(sx, sy, mn, 0, Math.PI * 2)
+                        ctx.arc(sx, sy, mn / dpr, 0, Math.PI * 2)
                         ctx.stroke()
                     }
                 }
