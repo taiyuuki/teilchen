@@ -169,7 +169,9 @@ export function registerBuiltins(): void {
         params: [
             { key: 'controlpointstart', label: 'CP Start', type: 'int', default: 0 },
             { key: 'controlpointend', label: 'CP End', type: 'int', default: 1 },
-            { key: 'count', label: 'Count', type: 'int', default: 100 },
+
+            // WE 为 float：小数控制布点相位（如 dna 用 64）
+            { key: 'count', label: 'Count', type: 'float', default: 100 },
             { key: 'limitbehavior', label: 'Limit', type: 'int', default: 0 },
         ],
     })
@@ -179,8 +181,10 @@ export function registerBuiltins(): void {
         label:  'Map Sequence Around CP',
         params: [
             { key: 'controlpoint', label: 'CP', type: 'int', default: 0 },
-            { key: 'count', label: 'Count', type: 'int', default: 100 },
-            { key: 'bounds', label: 'Bounds', type: 'vec3', default: [0, 0, 0] },
+
+            // WE 为 float：小数即双螺旋的扭转相位（如 dna 的 2.2 → 相邻粒子错开 ~164°）
+            { key: 'count', label: 'Count（圈数/扭转）', type: 'float', default: 100 },
+            { key: 'bounds', label: 'Bounds（角度范围·圈）', type: 'vec3', default: [0, 1, 0] },
             { key: 'axis', label: 'Axis', type: 'vec3', default: [0, 0, 1] },
             { key: 'limitbehavior', label: 'Limit', type: 'int', default: 0 },
         ],

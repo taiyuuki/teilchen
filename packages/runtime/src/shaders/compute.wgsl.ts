@@ -318,7 +318,10 @@ fn applyInitializer(p: ptr<function, Particle>, ini: IniGpu, seq: u32, k: u32) {
     case 10u {                                                                // mapsequencearoundcontrolpoint（axis 主分量）
       let cp0 = sysUniform.controlPoints[u32(clamp(i32(ini.a.x), 0, 7))].xyz;
       var rel = (*p).position - cp0;
-      let ang = f32(seq) / max(ini.a.y, 0.0001) * TAU;
+
+      // bounds = 角度范围（圈）：angle = 2π·(b0 + seq/count·(b1-b0))；count 为 float（小数 = 双螺旋扭转相位）
+      let turns = ini.a.w + (ini.b.x - ini.a.w) * (f32(seq) / max(ini.a.y, 0.0001));
+      let ang = turns * TAU;
       if (ini.a.z < 0.5) {
         let r = length(rel.yz);
         rel = vec3f(rel.x, cos(ang) * r, sin(ang) * r);        // 绕 x

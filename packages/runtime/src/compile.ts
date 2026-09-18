@@ -147,11 +147,13 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
         }
         else if (kind === InitializerKind.MapSequenceAroundCP) {
 
-            // 按 spawn 序号绕 cp 均匀转角（axis 取主分量：0=x/1=y/2=z）
+            // 按 spawn 序号绕 cp 转角（axis 取主分量：0=x/1=y/2=z）；
+            // bounds = 角度范围（圈，WE float[2] 默认 0..1）：angle = 2π·(b0 + seq/count·(b1-b0))
             const axis = vec(p.axis, [0, 1, 0])
             const main = axis[1] >= axis[0] && axis[1] >= axis[2] ? 1 : axis[0] >= axis[2] ? 0 : 2
-            put4(f32, o + 4, Math.trunc(num(p.controlpoint)), num(p.count, 100), main, 0)
-            put4(f32, o + 8, 0, 0, 0, 0)
+            const bounds = vec(p.bounds, [0, 1, 0])
+            put4(f32, o + 4, Math.trunc(num(p.controlpoint)), num(p.count, 100), main, bounds[0])
+            put4(f32, o + 8, bounds[1], 0, 0, 0)
         }
         else {
             put4(f32, o + 4, num(p.min), num(p.max), num(p.exponent, 1), 0)
