@@ -70,6 +70,29 @@ export const editor = reactive({
     pointer: [0, 0] as [number, number],
 })
 
+// ---------------------------------------------------------------- 自动保存（localStorage）
+
+const DEF_STORAGE_KEY = 'teilchen.def.v1'
+
+// 启动恢复上次编辑现场（含 children 子定义与 spin 等扩展字段；
+// 贴图为 GPU 资源不持久化，attach 后按材质引用尽力恢复）
+try {
+    const saved = localStorage.getItem(DEF_STORAGE_KEY)
+    if (saved) editor.def = normalizeDef(JSON.parse(saved) as ParticleSystemDef)
+}
+catch { /* 存档损坏则忽略，使用默认预设 */ }
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+watch(() => editor.def, () => {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+        try {
+            localStorage.setItem(DEF_STORAGE_KEY, JSON.stringify(editor.def))
+        }
+        catch { /* 容量超限等异常忽略 */ }
+    }, 400)
+}, { deep: true })
+
 // ---------------------------------------------------------------- runtime 生命周期
 
 export async function attachRuntime(canvas: HTMLCanvasElement): Promise<void> {
@@ -79,6 +102,10 @@ export async function attachRuntime(canvas: HTMLCanvasElement): Promise<void> {
     runtime.start()
     editor.runtimeReady = true
     setInterval(pollStats, 250)
+
+    // 恢复现场：材质引用的 sprite 贴图尽力加载（dev 的 /we 资产可用时）
+    const texPath = editor.def.material.textures[0]
+    if (texPath) void loadWeTexture(texPath)
 }
 
 export function getRuntime(): ParticleRuntime | null {
