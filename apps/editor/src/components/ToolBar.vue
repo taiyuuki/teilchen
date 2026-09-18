@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { PRESET_DEFS, type TextureChoice, editor, exportWeJson, importWeJson, loadDef, setTexture } from '../store.ts'
+import { PRESET_DEFS, type TextureChoice, WE_PRESET_DEFS, editor, exportWeJson, importWeJson, loadDef, loadWePreset, setTexture } from '../store.ts'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const textureFile = ref<HTMLInputElement | null>(null)
 const texFile = ref<HTMLInputElement | null>(null)
 
-function onPreset(e: Event): void {
-    const id = (e.target as HTMLSelectElement).value
-    const p = PRESET_DEFS.find(x => x.id === id)
-    if (p) loadDef(p.load());
+async function onPreset(e: Event): Promise<void> {
+    const v = (e.target as HTMLSelectElement).value
+    if (v.startsWith('p:')) {
+        const p = PRESET_DEFS.find(x => x.id === v.slice(2))
+        if (p) loadDef(p.load())
+    }
+    else if (v.startsWith('w:')) {
+        await loadWePreset(v.slice(2))
+    }
     (e.target as HTMLSelectElement).value = ''
 }
 
@@ -59,13 +64,24 @@ async function onTexFile(e: Event): Promise<void> {
       <option value="">
         预设 Presets…
       </option>
-      <option
-        v-for="p in PRESET_DEFS"
-        :key="p.id"
-        :value="p.id"
-      >
-        {{ p.label }}
-      </option>
+      <optgroup label="程序预设">
+        <option
+          v-for="p in PRESET_DEFS"
+          :key="p.id"
+          :value="`p:${p.id}`"
+        >
+          {{ p.label }}
+        </option>
+      </optgroup>
+      <optgroup label="WE 预设">
+        <option
+          v-for="p in WE_PRESET_DEFS"
+          :key="p.file"
+          :value="`w:${p.file}`"
+        >
+          {{ p.label }}
+        </option>
+      </optgroup>
     </select>
     <button @click="fileInput?.click()">
       导入 WE JSON

@@ -8,7 +8,7 @@ import {
     type Vec3,
     getModuleSpec,
 } from '@teilchen/core'
-import { editor } from '../store.ts'
+import { editor, openChildAsSystem } from '../store.ts'
 import ParamControl from './ParamControl.vue'
 
 const kindLabels: Record<ModuleKind, string> = {
@@ -85,6 +85,11 @@ function setChildVec(key: 'angles' | 'origin' | 'scale', i: number, e: Event): v
     const v = [...c[key]] as Vec3
     v[i] = Number((e.target as HTMLInputElement).value) || 0
     c[key] = v
+}
+
+function openSelectedChild(): void {
+    const sel = editor.selected
+    if (sel.kind === 'child') void openChildAsSystem(sel.index)
 }
 
 function setOrigin(i: number, e: Event): void {
@@ -294,12 +299,19 @@ function startResize(e: PointerEvent): void {
         </div>
       </template>
 
-      <!-- child 声明（子定义本体只读概要） -->
+      <!-- child 声明（子定义作为资产：独立打开编辑，不内嵌编辑） -->
       <template v-else-if="selectedChild">
         <h2>Child <code>{{ selectedChild.name || '(unnamed)' }}</code></h2>
         <p class="tip">
-          子系统声明（WE children 项）；子定义已随导入加载并参与渲染，其内部模块暂不提供编辑。
+          子系统声明（WE children 项）；子定义作为独立资产，点下方按钮载入编辑器单独修改与导出。
         </p>
+        <button
+          v-if="selectedChild.def"
+          class="open-child"
+          @click="openSelectedChild()"
+        >
+          在编辑器中打开（独立编辑）
+        </button>
         <div class="param">
           <label>Type</label><input
             :value="selectedChild.type"

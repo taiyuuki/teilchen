@@ -46,6 +46,16 @@ export const PRESET_DEFS = [
     { id: 'empty', label: '空白系统', load: emptyPreset },
 ]
 
+/** 精选 WE 预设（覆盖不同特性轴；完整清单不进编辑器，需要时用「导入 WE JSON」）。 */
+export const WE_PRESET_DEFS = [
+    { file: 'magic_vortex_orb', label: 'magic vortex orb · 控制点/涡旋/拖尾' },
+    { file: 'fireworks2', label: 'fireworks · 子粒子/事件' },
+    { file: 'fireflies', label: 'fireflies · 湍流/振荡' },
+    { file: 'dripping_water', label: 'dripping water · ropetrail/折射' },
+    { file: 'bubbles1', label: 'bubbles · 半透明基础' },
+    { file: 'dna', label: 'dna · 涡旋/变色' },
+]
+
 export const editor = reactive({
     def:          normalizeDef(fountainPreset()),
     selected:     { kind: 'system' } as Selection,
@@ -169,6 +179,38 @@ export function removeModule(kind: ModuleKind, index: number): void {
 
 export function selectModule(kind: ModuleKind, index: number): void {
     editor.selected = { kind, index }
+}
+
+/** 加载精选 WE 预设（走与导入相同的解析链路；依赖 dev 模式的 /we 资产托管）。 */
+export async function loadWePreset(file: string): Promise<void> {
+    try {
+        const res = await fetch(`/we/presets/${file}.json`)
+        if (!res.ok) {
+            pushWarning(`WE 预设 ${file} 不可用（需要 dev 模式的 /we 资产托管）`)
+
+            return
+        }
+        await importWeJson(await res.text())
+    }
+    catch(err) {
+        pushWarning(`WE 预设 ${file} 加载失败: ${(err as Error).message}`)
+    }
+}
+
+/**
+ * 把选中的 child 子定义作为当前系统打开（资产模型：子系统独立编辑、独立导出，
+ * 不回写父引用——与 WE 的文件级引用语义一致）。
+ */
+export async function openChildAsSystem(index: number): Promise<void> {
+    const child = editor.def.children[index]
+    if (!child?.def) return
+    const def = normalizeDef(JSON.parse(JSON.stringify(child.def)) as ParticleSystemDef)
+    def.name = child.name.split('/').pop()!.replace(/\.json$/, '') || 'child'
+    loadDef(def)
+
+    // 贴图是 runtime 侧状态（不在 def 里）：切到子定义材质引用的 sprite
+    const texPath = def.material.textures[0]
+    if (texPath) await loadWeTexture(texPath)
 }
 
 // ---------------------------------------------------------------- WE JSON 导入导出

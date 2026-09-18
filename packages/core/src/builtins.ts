@@ -44,6 +44,8 @@ export const GPU_SUPPORTED = new Set<string>([
     // renderers
     'renderer:sprite',
     'renderer:spritetrail',
+    'renderer:ropetrail',
+    'renderer:rope',
 ])
 
 export function registerBuiltins(): void {
