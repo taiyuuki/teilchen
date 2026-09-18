@@ -856,12 +856,31 @@ export class ParticleRuntime {
         this.cpAngleDriver = fn && index >= 0 && index < 8 ? { index, fn } : null
     }
 
+    /**
+     * 每帧角度写入：def.controlPoints[i].spin 的线性进动（angles + spin·t）全量重写，
+     * 手动驱动器（setControlPointAngleDriver）随后覆盖对应槽位。
+     */
     private applyCpAngleDriver(s: SystemRes): void {
+        const def = s.handle.def
+        const u = new Float32Array(8 * 4)
+        let hasSpin = false
+        for (let i = 0; i < 8; i++) {
+            const cp = def.controlPoints[i]
+            if (!cp) continue
+            const spin = cp.spin
+            if (!spin || spin[0] === 0 && spin[1] === 0 && spin[2] === 0) continue
+            hasSpin = true
+            u[i * 4] = cp.angles[0] + spin[0] * this.simTime
+            u[i * 4 + 1] = cp.angles[1] + spin[1] * this.simTime
+            u[i * 4 + 2] = cp.angles[2] + spin[2] * this.simTime
+        }
+        if (hasSpin) this.device.queue.writeBuffer(s.sysUniform, 40 * 4, u)
+
         if (!this.cpAngleDriver) return
         const a = this.cpAngleDriver.fn(this.simTime)
-        const u = new Float32Array([a[0], a[1], a[2], 0])
+        const o = new Float32Array([a[0], a[1], a[2], 0])
         const byteOffset = (40 + this.cpAngleDriver.index * 4) * 4
-        this.device.queue.writeBuffer(s.sysUniform, byteOffset, u)
+        this.device.queue.writeBuffer(s.sysUniform, byteOffset, o)
     }
 
     setPointer(canvasX: number, canvasY: number): void {

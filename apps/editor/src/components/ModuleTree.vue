@@ -29,7 +29,7 @@ function onSelectAdd(kind: ModuleKind, e: Event): void {
     (e.target as HTMLSelectElement).value = ''
 }
 
-function isActive(kind: ModuleKind, index: number): boolean {
+function isActive(kind: ModuleKind | 'child', index: number): boolean {
     const sel = editor.selected
 
     return sel.kind === kind && sel.index === index
@@ -90,6 +90,29 @@ function isActive(kind: ModuleKind, index: number): boolean {
           {{ s.label }}{{ isSupported(sec.kind, s.name) ? '' : '（未实现）' }}
         </option>
       </select>
+    </section>
+
+    <section v-if="editor.def.children.length">
+      <h3>Children <em>{{ editor.def.children.length }}</em></h3>
+      <ul>
+        <li
+          v-for="(c, i) in editor.def.children"
+          :key="i"
+          :class="{ active: isActive('child', i) }"
+          @click="editor.selected = { kind: 'child', index: i }"
+        >
+          <span class="mod-name">{{ c.name || '(unnamed)' }}</span>
+          <span
+            v-if="c.type !== 'static'"
+            class="badge"
+          >{{ c.type }}</span>
+          <span
+            v-if="!c.def"
+            class="badge"
+            title="子定义未加载（本地 /we 资产缺失）"
+          >未加载</span>
+        </li>
+      </ul>
     </section>
   </aside>
 </template>

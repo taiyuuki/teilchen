@@ -20,7 +20,7 @@ const kindLabels: Record<ModuleKind, string> = {
 
 const selectedModule = computed<{ kind: ModuleKind, mod: ParticleModule } | null>(() => {
     const sel = editor.selected
-    if (sel.kind === 'system') return null
+    if (sel.kind === 'system' || sel.kind === 'child') return null
     const list = sel.kind === 'emitter'
         ? editor.def.emitters
         : sel.kind === 'initializer'
@@ -39,18 +39,58 @@ const spec = computed(() => {
     return m ? getModuleSpec(m.kind, m.mod.name) : undefined
 })
 
+const selectedChild = computed(() => {
+    const sel = editor.selected
+
+    return sel.kind === 'child' ? editor.def.children[sel.index] : null
+})
+
+/** 选中 child 的子定义概要（只读展示；子定义本体的模块编辑待后续）。 */
+const childSummary = computed(() => {
+    const d = selectedChild.value?.def
+    if (!d) return null
+
+    return {
+        maxCount:     d.maxCount,
+        emitters:     d.emitters.length,
+        initializers: d.initializers.length,
+        operators:    d.operators.length,
+        renderers:    d.renderers.length,
+        children:     d.children.length,
+    }
+})
+
 const blendings: BlendMode[] = ['additive', 'translucent', 'normal', 'alphatocoverage', 'disabled']
+
+const animationModes = [
+    { value: 'sequence', label: 'sequence 序列' },
+    { value: 'randomframe', label: 'randomframe 随机帧' },
+] as const
+
+const DEG = 180 / Math.PI
+const deg = (rad: number): number => Number((rad * DEG).toFixed(1))
+
+function setCpVec(cpIndex: number, key: 'angles' | 'offset' | 'spin', i: number, e: Event, inDeg = false): void {
+    const cp = editor.def.controlPoints[cpIndex]
+    const v = [...cp[key]] as Vec3
+    let n = Number((e.target as HTMLInputElement).value) || 0
+    if (inDeg) n = n / DEG
+    v[i] = n
+    cp[key] = v
+}
+
+function setChildVec(key: 'angles' | 'origin' | 'scale', i: number, e: Event): void {
+    const c = selectedChild.value
+    if (!c) return
+    const v = [...c[key]] as Vec3
+    v[i] = Number((e.target as HTMLInputElement).value) || 0
+    c[key] = v
+}
 
 function setOrigin(i: number, e: Event): void {
     const v = [...editor.def.origin] as Vec3
     v[i] = Number((e.target as HTMLInputElement).value) || 0
     editor.def.origin = v
-}
-
-function setCpOffset(cpIndex: number, i: number, e: Event): void {
-    const v = [...editor.def.controlPoints[cpIndex].offset] as Vec3
-    v[i] = Number((e.target as HTMLInputElement).value) || 0
-    editor.def.controlPoints[cpIndex].offset = v
 }
 
 const PANEL_MIN = 300
@@ -117,6 +157,26 @@ function startResize(e: PointerEvent): void {
           >
         </div>
         <div class="param">
+          <label title="WE animationmode：序列播放或随机帧">动画模式</label>
+          <select v-model="editor.def.animationMode">
+            <option
+              v-for="m in animationModes"
+              :key="m.value"
+              :value="m.value"
+            >
+              {{ m.label }}
+            </option>
+          </select>
+        </div>
+        <div class="param">
+          <label title="WE sequencemultiplier：序列播放速率倍数">序列倍率</label><input
+            v-model.number="editor.def.sequenceMultiplier"
+            type="number"
+            step="0.1"
+            min="0"
+          >
+        </div>
+        <div class="param">
           <label>混合 Blending</label>
           <select v-model="editor.def.material.blending">
             <option
@@ -160,33 +220,178 @@ function startResize(e: PointerEvent): void {
 
         <h2>控制点 Control Points</h2>
         <p class="tip">
-          lock = 跟随鼠标（WE locktopointer）
+          lock = 跟随鼠标（WE locktopointer）；角度 = WE「控制点角度」（°，ZYX），旋转 vortex 轴/attract 原点；自转 = 角度进动速度（°/s，预览扩展）
         </p>
         <div
           v-for="(cp, i) in editor.def.controlPoints"
           :key="i"
-          class="cp-row"
+          class="cp-block"
         >
-          <span class="cp-id">cp{{ i }}</span>
-          <label class="cp-lock"><input
-            v-model="cp.lockToPointer"
-            type="checkbox"
-          >lock</label>
+          <div class="cp-row">
+            <span class="cp-id">cp{{ i }}</span>
+            <label class="cp-lock"><input
+              v-model="cp.lockToPointer"
+              type="checkbox"
+            >lock</label>
+            <div class="vec3">
+              <span
+                v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+                :key="axis"
+                class="axis"
+              >
+                <em>{{ axis }}</em><input
+                  type="number"
+                  step="any"
+                  :value="cp.offset[j]"
+                  @input="setCpVec(i, 'offset', j, $event)"
+                >
+              </span>
+            </div>
+          </div>
+          <div class="cp-row">
+            <span
+              class="cp-label"
+              title="控制点角度（°，ZYX 欧拉）——旋转 vortex 轴/attract 原点"
+            >角度</span>
+            <div class="vec3">
+              <span
+                v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+                :key="axis"
+                class="axis"
+              >
+                <em>{{ axis }}</em><input
+                  type="number"
+                  step="1"
+                  :value="deg(cp.angles[j])"
+                  @input="setCpVec(i, 'angles', j, $event, true)"
+                >
+              </span>
+            </div>
+          </div>
+          <div
+            v-if="cp.angles.some(a => a !== 0) || cp.spin.some(a => a !== 0)"
+            class="cp-row"
+          >
+            <span
+              class="cp-label"
+              title="角度自转速度（°/s）——线性进动，对应 WE controlpointangle 动画轨道"
+            >自转</span>
+            <div class="vec3">
+              <span
+                v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+                :key="axis"
+                class="axis"
+              >
+                <em>{{ axis }}</em><input
+                  type="number"
+                  step="1"
+                  :value="deg(cp.spin[j])"
+                  @input="setCpVec(i, 'spin', j, $event, true)"
+                >
+              </span>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- child 声明（子定义本体只读概要） -->
+      <template v-else-if="selectedChild">
+        <h2>Child <code>{{ selectedChild.name || '(unnamed)' }}</code></h2>
+        <p class="tip">
+          子系统声明（WE children 项）；子定义已随导入加载并参与渲染，其内部模块暂不提供编辑。
+        </p>
+        <div class="param">
+          <label>Type</label><input
+            :value="selectedChild.type"
+            type="text"
+            disabled
+          >
+        </div>
+        <div class="param">
+          <label title="event 类实例数上限">Max Count</label><input
+            v-model.number="selectedChild.maxCount"
+            type="number"
+            min="1"
+          >
+        </div>
+        <div class="param">
+          <label>Probability</label><input
+            v-model.number="selectedChild.probability"
+            type="number"
+            step="0.05"
+            min="0"
+            max="1"
+          >
+        </div>
+        <div class="param">
+          <label>CP Start</label><input
+            v-model.number="selectedChild.controlPointStartIndex"
+            type="number"
+            min="0"
+            max="7"
+          >
+        </div>
+        <div class="param">
+          <label>Origin</label>
           <div class="vec3">
             <span
-              v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+              v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
               :key="axis"
               class="axis"
             >
               <em>{{ axis }}</em><input
                 type="number"
                 step="any"
-                :value="cp.offset[j]"
-                @input="setCpOffset(i, j, $event)"
+                :value="selectedChild.origin[i]"
+                @input="setChildVec('origin', i, $event)"
               >
             </span>
           </div>
         </div>
+        <div class="param">
+          <label>Scale</label>
+          <div class="vec3">
+            <span
+              v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
+              :key="axis"
+              class="axis"
+            >
+              <em>{{ axis }}</em><input
+                type="number"
+                step="any"
+                :value="selectedChild.scale[i]"
+                @input="setChildVec('scale', i, $event)"
+              >
+            </span>
+          </div>
+        </div>
+        <div class="param">
+          <label>Angles</label>
+          <div class="vec3">
+            <span
+              v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
+              :key="axis"
+              class="axis"
+            >
+              <em>{{ axis }}</em><input
+                type="number"
+                step="any"
+                :value="selectedChild.angles[i]"
+                @input="setChildVec('angles', i, $event)"
+              >
+            </span>
+          </div>
+        </div>
+        <template v-if="childSummary">
+          <h3 class="sub">
+            子定义概要
+          </h3>
+          <p class="tip">
+            max {{ childSummary.maxCount.toLocaleString() }} · emitter {{ childSummary.emitters }} · initializer {{ childSummary.initializers }} · operator {{ childSummary.operators }} · renderer {{ childSummary.renderers }}<template v-if="childSummary.children">
+              · children {{ childSummary.children }}
+            </template>
+          </p>
+        </template>
       </template>
 
       <!-- 模块属性（注册表驱动） -->

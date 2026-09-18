@@ -46,7 +46,10 @@ export interface ControlPointDef {
     offset: Vec3;
 
     /** 控制点欧拉角（弧度，ZYX 序）——WE 编辑器"控制点角度"，旋转 vortex 轴/attract 原点。 */
-    angles:        Vec3;
+    angles: Vec3;
+
+    /** 角速度（弧度/秒，ZYX 序）——本工具链扩展：角度 = angles + spin·t 线性进动，模拟 WE 场景的 controlpointangle 动画轨道；非 WE 标准字段。 */
+    spin:          Vec3;
     lockToPointer: boolean;
 }
 
@@ -121,6 +124,7 @@ export function defaultControlPoints(): ControlPointDef[] {
         flags:         0,
         offset:        [0, 0, 0] as Vec3,
         angles:        [0, 0, 0] as Vec3,
+        spin:          [0, 0, 0] as Vec3,
         lockToPointer: false,
     }))
 }

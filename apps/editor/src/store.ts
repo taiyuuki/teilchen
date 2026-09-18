@@ -19,7 +19,7 @@ import {
 } from '@teilchen/core'
 import { ParticleRuntime, type SystemHandle, type TextureAsset, createHaloTexture, createTextureFromTex, createTextureFromUrl, createWhiteTexture  } from '@teilchen/runtime'
 
-export type Selection = { kind: 'system' } | { kind: ModuleKind, index: number }
+export type Selection = { kind: 'child', index: number } | { kind: 'system' } | { kind: ModuleKind, index: number }
 
 let runtime: ParticleRuntime | null = null
 let handle: SystemHandle | null = null
@@ -77,7 +77,12 @@ export function getRuntime(): ParticleRuntime | null {
 
 // 调试/自动化句柄（与 playground 的 __teilchen 同职责）
 if (typeof window !== 'undefined') {
-    (window as unknown as Record<string, unknown>).__ed = { getRuntime, get editor() { return editor } }
+    (window as unknown as Record<string, unknown>).__ed = {
+        getRuntime,
+        get editor() { return editor },
+        importWeJson,
+        serializeWe: () => serializeWeParticleJson(editor.def),
+    }
 }
 
 function pollStats(): void {
@@ -168,9 +173,23 @@ export function selectModule(kind: ModuleKind, index: number): void {
 
 // ---------------------------------------------------------------- WE JSON 导入导出
 
-/** 导入 WE particle JSON（可选 material JSON 文本；children 引用尝试从 playground 资产路径解析）。 */
+/** 导入 WE particle JSON（可选 material JSON 文本；material/children 引用从本地 WE 资产路径解析）。 */
 export async function importWeJson(text: string, materialText?: string): Promise<void> {
-    const { def, warnings } = parseWeParticleJson(text, materialText ? JSON.parse(materialText) : undefined, 'imported')
+    let materialJson: unknown | undefined
+    if (materialText) {
+        materialJson = JSON.parse(materialText)
+    }
+    else {
+
+        // 根材质引用自动解析（与 children 同源：/we/presets/materials/<basename>）
+        try {
+            const src = JSON.parse(text) as Record<string, unknown>
+            const matFile = typeof src.material === 'string' ? src.material.split('/').pop() : undefined
+            if (matFile) materialJson = await fetch(`/we/presets/materials/${matFile}`).then(r => r.ok ? r.json() : undefined)
+        }
+        catch { /* material 解析失败交给 parseWeParticleJson 上报 */ }
+    }
+    const { def, warnings } = parseWeParticleJson(text, materialJson, 'imported')
     for (const w of warnings) pushWarning(`[import] ${w}`)
     await attachChildDefs(def, async wePath => {
         const base = wePath.split('/')
@@ -192,6 +211,32 @@ export async function importWeJson(text: string, materialText?: string): Promise
         }
     })
     loadDef(def)
+
+    // 材质引用的 sprite 贴图自动加载（/we/tex/<path>.tex）
+    const texPath = def.material.textures[0]
+    if (texPath) await loadWeTexture(texPath)
+}
+
+/** 从本地 WE 资产加载 .tex 贴图并应用到当前系统（导入预设后自动套用）。 */
+export async function loadWeTexture(texPath: string): Promise<boolean> {
+    if (!runtime || !handle) return false
+    try {
+        const res = await fetch(`/we/tex/${texPath}.tex`)
+        if (!res.ok) return false
+        const tex = await createTextureFromTex(runtime.device, await res.arrayBuffer(), texPath)
+        const old = currentTexture
+        handle.update(editor.def, { texture: tex })
+        currentTexture = 'texture' in tex ? tex.texture : tex
+        editor.textureName = 'texture' in tex && tex.frames?.length ? 'tex-sprite' : 'tex'
+        old?.destroy()
+
+        return true
+    }
+    catch(err) {
+        pushWarning(`[import] 贴图 ${texPath} 加载失败: ${(err as Error).message}`)
+
+        return false
+    }
 }
 
 export function exportWeJson(): void {

@@ -82,6 +82,78 @@ function drawGizmos(): void {
             }
             ctx.setLineDash([])
 
+            // 算子辅助圈：vortex 环/轴向、attract 阈值圈、控制点角度轴向
+            // （角度含 spin 进动，与 GPU 侧 angles + spin·t 同步）
+            const rt = getRuntime()
+            const simT = rt?.time ?? 0
+            def.controlPoints.forEach((cp, i) => {
+                const ang: Vec3 = [
+                    cp.angles[0] + cp.spin[0] * simT,
+                    cp.angles[1] + cp.spin[1] * simT,
+                    cp.angles[2] + cp.spin[2] * simT,
+                ]
+                const rot = cpRotMat(ang)
+                const bx = origin[0] + cp.offset[0] + (cp.lockToPointer ? editor.pointer[0] : 0)
+                const by = origin[1] + cp.offset[1] + (cp.lockToPointer ? editor.pointer[1] : 0)
+                let hasVortex = false
+                for (const op of def.operators) {
+                    if ((Number(op.controlpoint) || 0) !== i) continue
+                    if (op.name === 'vortex' || op.name === 'vortex_v2') {
+                        hasVortex = true
+                        const off = mulMatVec(rot, asVec3(op.offset))
+                        const axis = mulMatVec(rot, asVec3(op.axis ?? [0, 0, 1]))
+                        const cx = bx + off[0]
+                        const cy = by + off[1]
+                        const ring = Number(op.ringradius) || 0
+                        ctx.strokeStyle = 'rgba(120, 255, 180, 0.55)'
+                        ctx.setLineDash([6, 4])
+                        if (ring > 0) {
+                            const [sx, sy] = toScreen(cx, cy)
+                            ctx.beginPath()
+                            ctx.arc(sx, sy, ring / dpr, 0, Math.PI * 2)
+                            ctx.stroke()
+                        }
+                        const norm = Math.hypot(axis[0], axis[1])
+                        if (norm > 1e-4) {
+                            const [sx, sy] = toScreen(cx, cy)
+                            ctx.strokeStyle = 'rgba(120, 255, 180, 0.85)'
+                            ctx.beginPath()
+                            ctx.moveTo(sx, sy)
+                            ctx.lineTo(sx + axis[0] / norm * 56, sy - axis[1] / norm * 56)
+                            ctx.stroke()
+                        }
+                        ctx.setLineDash([])
+                    }
+                    else if (op.name === 'controlpointattract') {
+                        const off = mulMatVec(rot, asVec3(op.origin))
+                        const th = Number(op.threshold) || 0
+                        if (th > 0) {
+                            const [sx, sy] = toScreen(bx + off[0], by + off[1])
+                            ctx.strokeStyle = 'rgba(255, 170, 120, 0.5)'
+                            ctx.setLineDash([3, 4])
+                            ctx.beginPath()
+                            ctx.arc(sx, sy, th / dpr, 0, Math.PI * 2)
+                            ctx.stroke()
+                            ctx.setLineDash([])
+                        }
+                    }
+                }
+
+                // 无 vortex 时，角度非零的控制点也标出旋转后的 Z 轴
+                if (!hasVortex && ang.some(a => a !== 0)) {
+                    const z = mulMatVec(rot, [0, 0, 1])
+                    const norm = Math.hypot(z[0], z[1])
+                    if (norm > 1e-4) {
+                        const [sx, sy] = toScreen(bx, by)
+                        ctx.strokeStyle = 'rgba(160, 170, 255, 0.6)'
+                        ctx.beginPath()
+                        ctx.moveTo(sx, sy)
+                        ctx.lineTo(sx + z[0] / norm * 40, sy - z[1] / norm * 40)
+                        ctx.stroke()
+                    }
+                }
+            })
+
             // control points
             ctx.font = '10px ui-monospace, monospace'
             def.controlPoints.forEach((cp, i) => {
@@ -121,6 +193,28 @@ function asVec3(v: unknown): Vec3 {
 
 function scalarOf(v: unknown): number {
     return Array.isArray(v) ? Number(v[0]) || 0 : Number(v) || 0
+}
+
+/** ZYX 欧拉角旋转矩阵（列向量），与 compute.wgsl 的 cpRot 一致。 */
+function cpRotMat(a: Vec3): [Vec3, Vec3, Vec3] {
+    const cx = Math.cos(a[0]); const sx = Math.sin(a[0])
+    const cy = Math.cos(a[1]); const sy = Math.sin(a[1])
+    const cz = Math.cos(a[2]); const sz = Math.sin(a[2])
+
+    return [
+        [cz * cy, sz * cy, -sy],
+        [cz * sy * sx - sz * cx, sz * sy * sx + cz * cx, cy * sx],
+        [cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx],
+    ]
+}
+
+/** 矩阵（列存储）× 向量。 */
+function mulMatVec(m: [Vec3, Vec3, Vec3], v: Vec3): Vec3 {
+    return [
+        m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2],
+        m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2],
+        m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2],
+    ]
 }
 </script>
 

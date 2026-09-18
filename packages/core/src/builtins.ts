@@ -43,6 +43,7 @@ export const GPU_SUPPORTED = new Set<string>([
 
     // renderers
     'renderer:sprite',
+    'renderer:spritetrail',
 ])
 
 export function registerBuiltins(): void {

@@ -90,6 +90,7 @@ export function parseWeParticleJson(
             cps[id].flags = parseWeInt(raw.flags, 0)
             cps[id].offset = parseWeVec3(raw.offset, [0, 0, 0])
             cps[id].angles = parseWeVec3(raw.angles, [0, 0, 0])
+            cps[id].spin = parseWeVec3(raw.spin, [0, 0, 0])
             cps[id].lockToPointer = parseWeBool(raw.locktopointer, (cps[id].flags & 1) !== 0)
         }
     }
@@ -144,6 +145,11 @@ function clampInt(v: number, lo: number, hi: number): number {
     return Math.min(hi, Math.max(lo, Math.trunc(v)))
 }
 
+/** vec3 任一分量非零（WE 导出习惯：缺省字段不写出）。 */
+function hasAny(v: Vec3): boolean {
+    return v[0] !== 0 || v[1] !== 0 || v[2] !== 0
+}
+
 /** 序列化回 WE particle JSON（vec3 写成 "x y z" 字符串）。 */
 export function serializeWeParticleJson(def: ParticleSystemDef): Record<string, unknown> {
     const out: Record<string, unknown> = {
@@ -159,9 +165,11 @@ export function serializeWeParticleJson(def: ParticleSystemDef): Record<string, 
         renderer:           def.renderers.map(e => serializeModule(e)),
         controlpoint:       def.controlPoints.map((cp, i) => ({
             id:            i,
-            flags:         cp.lockToPointer ? 1 : cp.flags,
+            flags:         cp.lockToPointer ? cp.flags | 1 : cp.flags & ~1,
             locktopointer: cp.lockToPointer,
             offset:        formatWeVec3(cp.offset),
+            ...hasAny(cp.angles) ? { angles: formatWeVec3(cp.angles) } : {},
+            ...hasAny(cp.spin) ? { spin: formatWeVec3(cp.spin) } : {},
         })),
         children: def.children.length
             ? def.children.map(c => ({
