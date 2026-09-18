@@ -184,7 +184,8 @@ export class ParticleRuntime {
     private playing = true
     private simTime = 0
     private lastNow = 0
-    private pointerWorld: [number, number] = [0, 0]
+    private pointerWorld:   [number, number] = [0, 0]
+    private resizeObserver: ResizeObserver | null = null
 
     /** 可选透视相机（null = 既有 2D 正交路径，行为不变）。 */
     private camera: { eye: Vec3, target: Vec3, up: Vec3, fov: number } | null = null
@@ -314,6 +315,11 @@ export class ParticleRuntime {
         })
 
         window.addEventListener('resize', this.resize)
+
+        // 容器级尺寸变化（布局定型、面板拖宽）不触发 window resize，
+        // 用 ResizeObserver 盯画布元素本身，保证背板尺寸与 CSS 尺寸一致
+        this.resizeObserver = new ResizeObserver(() => this.resize())
+        this.resizeObserver.observe(this.canvas)
         this.resize()
         this.ensureBgTexture()
 
@@ -1214,6 +1220,7 @@ export class ParticleRuntime {
 
     destroy(): void {
         this.stop()
+        this.resizeObserver?.disconnect()
         window.removeEventListener('resize', this.resize)
         for (const s of [...this.systems]) this.removeSystem(s.handle.id)
     }
