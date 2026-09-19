@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Vec3 } from '@teilchen/core'
-import { attachRuntime, editor, getRuntime } from '../store.ts'
+import { attachRuntime, editor, getRuntime, isCpActive } from '../store.ts'
 
 const gpuCanvas = ref<HTMLCanvasElement | null>(null)
 const overlay = ref<HTMLCanvasElement | null>(null)
@@ -51,20 +51,9 @@ function view(): { w: number, h: number, dpr: number } {
     }
 }
 
-/** 控制点是否「活跃」：被任意模块/子声明引用、有偏移/角度/自转、或锁定跟随。 */
-function isCpActive(def: typeof editor.def, i: number): boolean {
-    const cp = def.controlPoints[i]
-    if (!cp) return false
-    if (cp.lockToPointer) return true
-    if (cp.offset.some(v => v !== 0) || cp.angles.some(v => v !== 0) || cp.spin.some(v => v !== 0)) return true
-    const referenced = [def.emitters, def.initializers, def.operators].some(list =>
-        list.some(m => Object.keys(m).some(k => k.startsWith('controlpoint') && Number(m[k]) === i)))
-
-    return referenced || def.children.some(c => c.controlPointStartIndex === i)
-}
-
 /** 收集 gizmo 几何：控制点位置（含 lock 跟随/自转进动）与可拖拽圆（vortex 环/attract 阈值/球发射半径）。
- *  默认只保留活跃控制点（showAllCps 展开）；allCps 始终按下标可查，供算子圆定位。 */
+ *  默认只保留活跃控制点（showAllCps 展开）；allCps 始终按下标可查，供算子圆定位。
+ *  活跃判定 isCpActive 在 store（树列表与 gizmo 共用）。 */
 function gizmoGeometry() {
     const def = editor.def
     const origin = def.origin
@@ -81,7 +70,7 @@ function gizmoGeometry() {
             i,
             ang,
             locked: cp.lockToPointer,
-            active: isCpActive(def, i),
+            active: isCpActive(i),
             x:      origin[0] + cp.offset[0] + (cp.lockToPointer ? editor.pointer[0] : 0),
             y:      origin[1] + cp.offset[1] + (cp.lockToPointer ? editor.pointer[1] : 0),
         }
@@ -198,6 +187,7 @@ function hitGizmo(e: PointerEvent): DragTarget | null {
 function onPointerDown(e: PointerEvent): void {
     drag = hitGizmo(e)
     if (!drag) return
+    if (drag.kind === 'cp') editor.selected = { kind: 'cp', index: drag.cpIndex }
     wrap.value?.setPointerCapture(e.pointerId)
     applyDrag(e)
 }
@@ -309,28 +299,42 @@ function drawGizmos(): void {
             // control points：十字先画，标签纵向避让（同位置的标签自上往下错开）
             ctx.font = '10px ui-monospace, monospace'
             const labelSlot = new Map<number, number>()
+            const selIdx = editor.selected.kind === 'cp' ? editor.selected.index : -1
             for (const g of geo.cps) {
                 const dragging = drag?.kind === 'cp' && drag.cpIndex === g.i
+                const selected = selIdx === g.i
                 const [sx, sy] = toScreen(g.x, g.y)
                 ctx.strokeStyle = g.locked
                     ? 'rgba(255, 210, 120, 0.95)'
-                    : dragging ? 'rgba(255, 160, 160, 1)' : g.active ? 'rgba(255, 130, 130, 0.9)' : 'rgba(255, 130, 130, 0.3)'
-                const arm = dragging ? 9 : 7
+                    : dragging
+                        ? 'rgba(255, 160, 160, 1)'
+                        : selected ? 'rgba(255, 220, 220, 1)' : g.active ? 'rgba(255, 130, 130, 0.9)' : 'rgba(255, 130, 130, 0.3)'
+                const arm = dragging || selected ? 9 : 7
                 ctx.beginPath()
                 ctx.moveTo(sx - arm, sy)
                 ctx.lineTo(sx + arm, sy)
                 ctx.moveTo(sx, sy - arm)
                 ctx.lineTo(sx, sy + arm)
                 ctx.stroke()
+                if (selected) {
+                    ctx.strokeStyle = 'rgba(255, 200, 200, 0.5)'
+                    ctx.beginPath()
+                    ctx.arc(sx, sy, 13, 0, Math.PI * 2)
+                    ctx.stroke()
+                }
             }
             for (const g of [...geo.cps].sort((a, b) => a.i - b.i)) {
                 const [sx, sy] = toScreen(g.x, g.y)
                 const key = Math.round(sx / 8) * 4096 + Math.round(sy / 8)
                 const slot = labelSlot.get(key) ?? 0
                 labelSlot.set(key, slot + 1)
+                const selected = selIdx === g.i
                 ctx.fillStyle = g.locked
                     ? 'rgba(255, 210, 120, 0.95)'
-                    : g.active ? 'rgba(255, 130, 130, 0.9)' : 'rgba(255, 130, 130, 0.3)'
+                    : selected
+                        ? 'rgba(255, 220, 220, 1)'
+                        : g.active ? 'rgba(255, 130, 130, 0.9)' : 'rgba(255, 130, 130, 0.3)'
+                ctx.font = selected ? 'bold 10px ui-monospace, monospace' : '10px ui-monospace, monospace'
                 ctx.fillText(`cp${g.i}${g.locked ? ' ⌨' : ''}${g.active ? '' : ' ·'}`, sx + 9, sy - 6 - slot * 12)
             }
 

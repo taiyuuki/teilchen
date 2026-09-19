@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { GPU_SUPPORTED, type ModuleKind, getModulesByKind } from '@teilchen/core'
-import { addModule, editor, removeModule, selectModule } from '../store.ts'
+import { addModule, editor, isCpActive, removeModule, selectModule } from '../store.ts'
 
 const sections: { kind: ModuleKind, label: string }[] = [
     { kind: 'emitter', label: 'Emitters' },
@@ -29,10 +29,14 @@ function onSelectAdd(kind: ModuleKind, e: Event): void {
     (e.target as HTMLSelectElement).value = ''
 }
 
-function isActive(kind: ModuleKind | 'child', index: number): boolean {
+function isActive(kind: ModuleKind | 'child' | 'cp', index: number): boolean {
     const sel = editor.selected
 
     return sel.kind === kind && sel.index === index
+}
+
+function selectCp(index: number): void {
+    editor.selected = { kind: 'cp', index }
 }
 </script>
 
@@ -90,6 +94,29 @@ function isActive(kind: ModuleKind | 'child', index: number): boolean {
           {{ s.label }}{{ isSupported(sec.kind, s.name) ? '' : '（未实现）' }}
         </option>
       </select>
+    </section>
+
+    <section>
+      <h3>控制点 <em>{{ editor.def.controlPoints.filter((_, i) => isCpActive(i)).length }}</em></h3>
+      <ul>
+        <li
+          v-for="(cp, i) in editor.def.controlPoints"
+          :key="i"
+          :class="{ active: isActive('cp', i), dim: !isCpActive(i) }"
+          @click="selectCp(i)"
+        >
+          <span class="mod-name">cp{{ i }}</span>
+          <span
+            v-if="cp.lockToPointer"
+            class="badge"
+          >lock</span>
+          <span
+            v-if="!isCpActive(i)"
+            class="badge"
+            title="未被引用且无偏移/角度"
+          >空闲</span>
+        </li>
+      </ul>
     </section>
 
     <section v-if="editor.def.children.length">

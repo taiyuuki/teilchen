@@ -20,7 +20,7 @@ const kindLabels: Record<ModuleKind, string> = {
 
 const selectedModule = computed<{ kind: ModuleKind, mod: ParticleModule } | null>(() => {
     const sel = editor.selected
-    if (sel.kind === 'system' || sel.kind === 'child') return null
+    if (sel.kind === 'system' || sel.kind === 'child' || sel.kind === 'cp') return null
     const list = sel.kind === 'emitter'
         ? editor.def.emitters
         : sel.kind === 'initializer'
@@ -43,6 +43,30 @@ const selectedChild = computed(() => {
     const sel = editor.selected
 
     return sel.kind === 'child' ? editor.def.children[sel.index] : null
+})
+
+/** 左侧树选中的控制点（带引用摘要）。 */
+const selectedCp = computed(() => {
+    const sel = editor.selected
+    if (sel.kind !== 'cp') return null
+    const cp = editor.def.controlPoints[sel.index]
+    if (!cp) return null
+    const refs: string[] = []
+    const scan = (kind: string, list: Record<string, unknown>[]) => {
+        for (const m of list) {
+            for (const [k, v] of Object.entries(m)) {
+                if (k.startsWith('controlpoint') && Number(v) === sel.index) refs.push(`${kind}·${m.name}`)
+            }
+        }
+    }
+    scan('emitter', editor.def.emitters)
+    scan('initializer', editor.def.initializers)
+    scan('operator', editor.def.operators)
+    for (const c of editor.def.children) {
+        if (c.controlPointStartIndex === sel.index) refs.push(`child·${c.name || '(unnamed)'}`)
+    }
+
+    return { index: sel.index, cp, usage: refs.join('、') }
 })
 
 /** 选中 child 的子定义概要（只读展示；子定义本体的模块编辑待后续）。 */
@@ -222,79 +246,89 @@ function startResize(e: PointerEvent): void {
             </span>
           </div>
         </div>
+        <p class="tip">
+          控制点在左侧树「控制点」一栏选择编辑
+        </p>
+      </template>
 
-        <h2>控制点 Control Points</h2>
+      <!-- 单个控制点属性（左侧树选中） -->
+      <template v-else-if="selectedCp">
+        <h2>控制点 <code>cp{{ selectedCp.index }}</code></h2>
         <p class="tip">
           lock = 跟随鼠标（WE locktopointer）；角度 = WE「控制点角度」（°，ZYX），旋转 vortex 轴/attract 原点；自转 = 角度进动速度（°/s，预览扩展）
         </p>
-        <div
-          v-for="(cp, i) in editor.def.controlPoints"
-          :key="i"
-          class="cp-block"
+        <p
+          v-if="selectedCp.usage"
+          class="tip"
         >
-          <div class="cp-row">
-            <span class="cp-id">cp{{ i }}</span>
-            <label class="cp-lock"><input
-              v-model="cp.lockToPointer"
-              type="checkbox"
-            >lock</label>
-            <div class="vec3">
-              <span
-                v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
-                :key="axis"
-                class="axis"
-              >
-                <em>{{ axis }}</em><input
-                  type="number"
-                  step="any"
-                  :value="cp.offset[j]"
-                  @input="setCpVec(i, 'offset', j, $event)"
-                >
-              </span>
-            </div>
-          </div>
-          <div class="cp-row">
+          引用：{{ selectedCp.usage }}
+        </p>
+        <p
+          v-else
+          class="tip"
+        >
+          未被任何模块引用
+        </p>
+        <div class="param">
+          <label>锁定鼠标</label>
+          <label class="cp-lock"><input
+            v-model="selectedCp.cp.lockToPointer"
+            type="checkbox"
+          >跟随指针（locktopointer）</label>
+        </div>
+        <div class="param">
+          <label>偏移 Offset</label>
+          <div class="vec3">
             <span
-              class="cp-label"
-              title="控制点角度（°，ZYX 欧拉）——旋转 vortex 轴/attract 原点"
-            >角度</span>
-            <div class="vec3">
-              <span
-                v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
-                :key="axis"
-                class="axis"
+              v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+              :key="axis"
+              class="axis"
+            >
+              <em>{{ axis }}</em><input
+                type="number"
+                step="any"
+                :value="selectedCp.cp.offset[j]"
+                @input="setCpVec(selectedCp.index, 'offset', j, $event)"
               >
-                <em>{{ axis }}</em><input
-                  type="number"
-                  step="1"
-                  :value="deg(cp.angles[j])"
-                  @input="setCpVec(i, 'angles', j, $event, true)"
-                >
-              </span>
-            </div>
+            </span>
           </div>
-          <div
-            v-if="cp.angles.some(a => a !== 0) || cp.spin.some(a => a !== 0)"
-            class="cp-row"
-          >
+        </div>
+        <div class="param">
+          <label
+            title="控制点角度（°，ZYX 欧拉）——旋转 vortex 轴/attract 原点"
+          >角度 Angles</label>
+          <div class="vec3">
             <span
-              class="cp-label"
-              title="角度自转速度（°/s）——线性进动，对应 WE controlpointangle 动画轨道"
-            >自转</span>
-            <div class="vec3">
-              <span
-                v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
-                :key="axis"
-                class="axis"
+              v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+              :key="axis"
+              class="axis"
+            >
+              <em>{{ axis }}</em><input
+                type="number"
+                step="1"
+                :value="deg(selectedCp.cp.angles[j])"
+                @input="setCpVec(selectedCp.index, 'angles', j, $event, true)"
               >
-                <em>{{ axis }}</em><input
-                  type="number"
-                  step="1"
-                  :value="deg(cp.spin[j])"
-                  @input="setCpVec(i, 'spin', j, $event, true)"
-                >
-              </span>
-            </div>
+            </span>
+          </div>
+        </div>
+        <div class="param">
+          <label
+            title="角度自转速度（°/s）——线性进动，对应 WE controlpointangle 动画轨道"
+          >自转 Spin</label>
+          <div class="vec3">
+            <span
+              v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
+              :key="axis"
+              class="axis"
+            >
+              <em>{{ axis }}</em><input
+                type="number"
+                step="1"
+                :value="deg(selectedCp.cp.spin[j])"
+                @input="setCpVec(selectedCp.index, 'spin', j, $event, true)"
+              >
+            </span>
           </div>
         </div>
       </template>

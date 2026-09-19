@@ -19,7 +19,7 @@ import {
 } from '@teilchen/core'
 import { ParticleRuntime, type SystemHandle, type TextureAsset, createHaloTexture, createTextureFromTex, createTextureFromUrl, createWhiteTexture  } from '@teilchen/runtime'
 
-export type Selection = { kind: 'child', index: number } | { kind: 'system' } | { kind: ModuleKind, index: number }
+export type Selection = { kind: 'child', index: number } | { kind: 'cp', index: number } | { kind: 'system' } | { kind: ModuleKind, index: number }
 
 let runtime: ParticleRuntime | null = null
 let handle: SystemHandle | null = null
@@ -209,6 +209,19 @@ export function removeModule(kind: ModuleKind, index: number): void {
 
 export function selectModule(kind: ModuleKind, index: number): void {
     editor.selected = { kind, index }
+}
+
+/** 控制点是否「活跃」：被任意模块/子声明引用、有偏移/角度/自转、或锁定跟随。 */
+export function isCpActive(i: number): boolean {
+    const def = editor.def
+    const cp = def.controlPoints[i]
+    if (!cp) return false
+    if (cp.lockToPointer) return true
+    if (cp.offset.some(v => v !== 0) || cp.angles.some(v => v !== 0) || cp.spin.some(v => v !== 0)) return true
+    const referenced = [def.emitters, def.initializers, def.operators].some(list =>
+        list.some(m => Object.keys(m).some(k => k.startsWith('controlpoint') && Number(m[k]) === i)))
+
+    return referenced || def.children.some(c => c.controlPointStartIndex === i)
 }
 
 /** 加载精选 WE 预设（走与导入相同的解析链路；依赖 dev 模式的 /we 资产托管）。 */
