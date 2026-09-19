@@ -308,6 +308,117 @@ const LABEL_ZH: Record<string, string> = {
     'renderer:ropetrail':                          '绳索拖尾',
 }
 
+/** zh 下的参数标签：按参数 key 的通用表（同名 key 各模块含义一致）。 */
+const PARAM_ZH: Record<string, string> = {
+    rate:               '速率',
+    origin:             '原点',
+    directions:         '方向',
+    distancemin:        '最小距离',
+    distancemax:        '最大距离',
+    speedmin:           '最小速度',
+    speedmax:           '最大速度',
+    sign:               '符号（0 保留 / ±1 强制）',
+    instantaneous:      '瞬时发射',
+    maxtoemitperperiod: '每周期上限',
+    duration:           '持续时间',
+    controlpoint:       '控制点',
+    flags:              '标志位',
+    cone:               '锥角',
+    exponent:           '指数',
+    min:                '最小值',
+    max:                '最大值',
+    huemin:             '最小色相',
+    huemax:             '最大色相',
+    saturationmin:      '最小饱和度',
+    saturationmax:      '最大饱和度',
+    valuemin:           '最小明度',
+    valuemax:           '最大明度',
+    count:              '数量',
+    limitbehavior:      '上限行为',
+    forward:            '前向',
+    phasemax:           '最大相位',
+    timescale:          '时间缩放',
+    gravity:            '重力',
+    drag:               '阻力',
+    force:              '力',
+    fadeintime:         '淡入时间',
+    fadeouttime:        '淡出时间',
+    starttime:          '开始时间（寿命进度）',
+    endtime:            '结束时间（寿命进度）',
+    frequencymin:       '最小频率',
+    frequencymax:       '最大频率',
+    scalemin:           '最小幅度',
+    scalemax:           '最大幅度',
+    phasemin:           '最小相位',
+    mask:               '掩码',
+    blendinstart:       '淡入开始',
+    blendinend:         '淡入结束',
+    axis:               '轴',
+    offset:             '偏移',
+    ringradius:         '环半径',
+    ringwidth:          '环宽度',
+    ringpulldistance:   '环拉力距离',
+    distanceinner:      '内圈距离',
+    distanceouter:      '外圈距离',
+    speedinner:         '内圈速度',
+    speedouter:         '外圈速度',
+    distance:           '距离',
+    variablestrength:   '可变强度',
+    neighborthreshold:  '邻居阈值',
+    separationfactor:   '分离',
+    alignmentfactor:    '对齐',
+    cohesionfactor:     '聚合',
+    threshold:          '阈值',
+    orientation:        '朝向',
+    length:             '长度',
+    maxlength:          '最大长度',
+    minlength:          '最小长度',
+    uvscale:            'UV 缩放',
+    uvscrolling:        'UV 滚动',
+    uvsmoothing:        'UV 平滑',
+    segments:           '分段数',
+    fadealpha:          '透明度衰减',
+}
+
+/** zh 下通用表不适用时的按模块覆盖；key = `${kind}:${name}.${paramKey}`。 */
+const PARAM_ZH_OVERRIDE: Record<string, string> = {
+
+    // sphererandom 的 distance 是半径
+    'emitter:sphererandom.distancemin':                              '最小半径',
+    'emitter:sphererandom.distancemax':                              '最大半径',
+
+    // randomRange 生成的 min/max 按模块含义不同
+    'initializer:lifetimerandom.min':                                '最小生命周期',
+    'initializer:lifetimerandom.max':                                '最大生命周期',
+    'initializer:sizerandom.min':                                    '最小大小',
+    'initializer:sizerandom.max':                                    '最大大小',
+    'initializer:alpharandom.min':                                   '最小透明度',
+    'initializer:alpharandom.max':                                   '最大透明度',
+    'initializer:colorrandom.min':                                   '最小颜色',
+    'initializer:colorrandom.max':                                   '最大颜色',
+    'initializer:turbulentvelocityrandom.scale':                     '锥角比例（0-1）',
+    'initializer:turbulentvelocityrandom.offset':                    '偏移（绕 right 旋转）',
+    'initializer:mapsequencebetweencontrolpoints.controlpointstart': '控制点起始',
+    'initializer:mapsequencebetweencontrolpoints.controlpointend':   '控制点结束',
+    'initializer:mapsequencearoundcontrolpoint.count':               '数量（圈数/扭转）',
+    'initializer:mapsequencearoundcontrolpoint.bounds':              '范围（角度范围·圈）',
+
+    // changeParams 的起止值按模块属性而异
+    'operator:alphachange.startvalue':                               '透明度起始值',
+    'operator:alphachange.endvalue':                                 '透明度结束值',
+    'operator:sizechange.startvalue':                                '大小起始值',
+    'operator:sizechange.endvalue':                                  '大小结束值',
+    'operator:colorchange.startvalue':                               '颜色起始值',
+    'operator:colorchange.endvalue':                                 '颜色结束值',
+
+    // attract 的 scale 是力强度
+    'operator:controlpointattract.scale': '强度',
+
+    // 湍流的 scale 是噪声尺度
+    'operator:turbulence.scale':                                     '噪声缩放',
+    'renderer:ropetrail.length':                                     '长度（拖尾时长·秒）',
+}
+
 /** en 下的模块描述/参数标签覆盖（zh 直接用注册表源文案）；key = `${kind}:${name}`。 */
 const SPEC_EN: Record<string, { desc?: string, params?: Record<string, string> }> = {
     'emitter:boxrandom': {
@@ -353,9 +464,11 @@ export function moduleDescription(kind: ModuleKind, name: string, fallback?: str
     return SPEC_EN[`${kind}:${name}`]?.desc ?? fallback
 }
 
-/** 参数标签：en 优先取覆盖层，否则剔除中文。 */
+/** 参数标签：zh 走覆盖表/通用表；en 优先取覆盖层，否则剔除中文。 */
 export function paramLabel(kind: ModuleKind, name: string, p: ParamSpec): string {
-    if (i18n.locale !== 'en') return p.label
+    if (i18n.locale === 'zh') {
+        return PARAM_ZH_OVERRIDE[`${kind}:${name}.${p.key}`] ?? PARAM_ZH[p.key] ?? p.label
+    }
 
     return SPEC_EN[`${kind}:${name}`]?.params?.[p.key] ?? stripCjk(p.label)
 }
