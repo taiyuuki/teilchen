@@ -331,6 +331,11 @@ export class VFXPlayer {
         return this.rt.time
     }
 
+    /** 统计回调（约每 500ms 触发；create 时也可经 onStats 传入，null 清除）。 */
+    setStatsListener(fn: ((stats: RuntimeStats) => void) | null): void {
+        this.rt.setStatsListener(fn)
+    }
+
     /** 载入：场景文件 / 原生 def / WE particle JSON（对象或 JSON 字符串均可）。 */
     async load(input: unknown, opts: VFXPlayerLoadOptions = {}): Promise<LoadedSystem[]> {
         const source = opts.assets ?? EMPTY_SOURCE

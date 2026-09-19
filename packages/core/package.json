@@ -24,5 +24,21 @@
     "license": "MIT",
     "files": [
         "dist"
-    ]
+    ],
+    "description": "GPU VFX particle system data model + module registry + Wallpaper Engine JSON import/export (graphics-API agnostic)",
+    "keywords": [
+        "particles",
+        "vfx",
+        "wallpaper-engine",
+        "json",
+        "data-model"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/taiyuuki/teilchen.git"
+    },
+    "bugs": {
+        "url": "https://github.com/taiyuuki/teilchen/issues"
+    },
+    "prepublishOnly": "pnpm build"
 }

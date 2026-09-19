@@ -33,5 +33,22 @@
     },
     "devDependencies": {
         "@webgpu/types": "catalog:"
-    }
+    },
+    "description": "WebGPU GPU VFX runtime: GPU simulation + indirect billboard rendering + VFXPlayer high-level API",
+    "keywords": [
+        "webgpu",
+        "particles",
+        "vfx",
+        "gpu",
+        "simulation",
+        "wallpaper-engine"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/taiyuuki/teilchen.git"
+    },
+    "bugs": {
+        "url": "https://github.com/taiyuuki/teilchen/issues"
+    },
+    "prepublishOnly": "pnpm build"
 }

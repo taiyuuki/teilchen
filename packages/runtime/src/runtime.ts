@@ -37,7 +37,12 @@ export interface RuntimeOptions {
     canvas:      HTMLCanvasElement;
     device?:     GPUDevice;
     clearColor?: { r: number; g: number; b: number; a: number };
-    onWarning?:  (msg: string) => void;
+
+    /** 编译/运行告警（未知模块、GPU 错误、帧循环异常）。 */
+    onWarning?: (msg: string) => void;
+
+    /** 统计回调：各系统 alive/rendered 计数器异步回读完成后触发（约每 500ms）。 */
+    onStats?: (stats: RuntimeStats) => void;
 }
 
 export interface AddSystemOptions {
@@ -148,6 +153,7 @@ export class ParticleRuntime {
     private readonly format:    GPUTextureFormat
     private clearColor:         GPUColor
     private readonly onWarning: (msg: string) => void
+    private onStats:            ((stats: RuntimeStats) => void) | null
 
     private readonly frameUniform:  GPUBuffer
     private readonly computeModule: GPUShaderModule
@@ -209,6 +215,7 @@ export class ParticleRuntime {
         this.format = format
         this.clearColor = opts.clearColor ?? { r: 0.016, g: 0.02, b: 0.03, a: 1 }
         this.onWarning = opts.onWarning ?? (m => console.warn('[teilchen]', m))
+        this.onStats = opts.onStats ?? null
 
         this.frameUniform = device.createBuffer({ size: FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
 
@@ -862,6 +869,11 @@ export class ParticleRuntime {
         this.clearColor = color
     }
 
+    /** 统计回调（覆盖 create 时的 onStats；null 清除）。 */
+    setStatsListener(fn: ((stats: RuntimeStats) => void) | null): void {
+        this.onStats = fn
+    }
+
     /** 控制点角度动画驱动器（每帧以 simTime 求值写入 cpAngles；null 清除）。 */
     setControlPointAngleDriver(index: number, fn: ((simTime: number) => Vec3) | null): void {
         this.cpAngleDriver = fn && index >= 0 && index < 8 ? { index, fn } : null
@@ -1181,6 +1193,7 @@ export class ParticleRuntime {
                     s.stats = { alive: data[0], rendered: data[1] }
                     s.statsStaging!.unmap()
                     s.statsPending = false
+                    this.onStats?.(this.stats)
                 })
                 .catch(() => {
                     s.statsPending = false
