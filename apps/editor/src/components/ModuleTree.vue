@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { GPU_SUPPORTED, type ModuleKind, getModulesByKind } from '@teilchen/core'
 import { addModule, editor, isCpActive, removeModule, selectModule } from '../store.ts'
+import { moduleLabel, t } from '../i18n.ts'
 
-const sections: { kind: ModuleKind, label: string }[] = [
-    { kind: 'emitter', label: 'Emitters' },
-    { kind: 'initializer', label: 'Initializers' },
-    { kind: 'operator', label: 'Operators' },
-    { kind: 'renderer', label: 'Renderers' },
+const sections: { kind: ModuleKind }[] = [
+    { kind: 'emitter' },
+    { kind: 'initializer' },
+    { kind: 'operator' },
+    { kind: 'renderer' },
 ]
 
 function listFor(kind: ModuleKind): { name: string }[] {
@@ -55,7 +56,7 @@ function selectCp(index: number): void {
       v-for="sec in sections"
       :key="sec.kind"
     >
-      <h3>{{ sec.label }} <em>{{ listFor(sec.kind).length }}</em></h3>
+      <h3>{{ t(`sec.${sec.kind}`) }} <em>{{ listFor(sec.kind).length }}</em></h3>
       <ul>
         <li
           v-for="(m, i) in listFor(sec.kind)"
@@ -63,15 +64,18 @@ function selectCp(index: number): void {
           :class="{ active: isActive(sec.kind, i) }"
           @click="selectModule(sec.kind, i)"
         >
-          <span class="mod-name">{{ m.name }}</span>
+          <span
+            class="mod-name"
+            :title="m.name"
+          >{{ moduleLabel(sec.kind, m.name, m.name) }}</span>
           <span
             v-if="!isSupported(sec.kind, m.name)"
             class="badge"
-            title="GPU 未实现，将跳过"
-          >未实现</span>
+            :title="t('badge.unimplementedTip')"
+          >{{ t('badge.unimplemented') }}</span>
           <button
             class="rm"
-            title="删除"
+            :title="t('action.delete')"
             @click.stop="removeModule(sec.kind, i)"
           >
             ×
@@ -84,20 +88,20 @@ function selectCp(index: number): void {
         @change="onSelectAdd(sec.kind, $event)"
       >
         <option value="">
-          + 添加{{ sec.kind === 'emitter' ? '发射器' : sec.kind === 'initializer' ? '初始化器' : sec.kind === 'operator' ? '操作符' : '渲染器' }}…
+          {{ t(`add.${sec.kind}`) }}
         </option>
         <option
           v-for="s in getModulesByKind(sec.kind)"
           :key="s.name"
           :value="s.name"
         >
-          {{ s.label }}{{ isSupported(sec.kind, s.name) ? '' : '（未实现）' }}
+          {{ moduleLabel(sec.kind, s.name, s.label) }}{{ isSupported(sec.kind, s.name) ? '' : t('tree.unimplementedSuffix') }}
         </option>
       </select>
     </section>
 
     <section>
-      <h3>控制点 <em>{{ editor.def.controlPoints.filter((_, i) => isCpActive(i)).length }}</em></h3>
+      <h3>{{ t('tree.controlPoints') }} <em>{{ editor.def.controlPoints.filter((_, i) => isCpActive(i)).length }}</em></h3>
       <ul>
         <li
           v-for="(cp, i) in editor.def.controlPoints"
@@ -113,8 +117,8 @@ function selectCp(index: number): void {
           <span
             v-if="!isCpActive(i)"
             class="badge"
-            title="未被引用且无偏移/角度"
-          >空闲</span>
+            :title="t('badge.idleTip')"
+          >{{ t('badge.idle') }}</span>
         </li>
       </ul>
     </section>
@@ -136,8 +140,8 @@ function selectCp(index: number): void {
           <span
             v-if="!c.def"
             class="badge"
-            title="子定义未加载（本地 /we 资产缺失）"
-          >未加载</span>
+            :title="t('badge.notLoadedTip')"
+          >{{ t('badge.notLoaded') }}</span>
         </li>
       </ul>
     </section>

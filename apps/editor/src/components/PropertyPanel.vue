@@ -9,14 +9,8 @@ import {
     getModuleSpec,
 } from '@teilchen/core'
 import { editor, openChildAsSystem } from '../store.ts'
+import { blendModeLabel, moduleDescription, moduleLabel, paramLabel, t } from '../i18n.ts'
 import ParamControl from './ParamControl.vue'
-
-const kindLabels: Record<ModuleKind, string> = {
-    emitter:     'Emitter',
-    initializer: 'Initializer',
-    operator:    'Operator',
-    renderer:    'Renderer',
-}
 
 const selectedModule = computed<{ kind: ModuleKind, mod: ParticleModule } | null>(() => {
     const sel = editor.selected
@@ -66,7 +60,7 @@ const selectedCp = computed(() => {
         if (c.controlPointStartIndex === sel.index) refs.push(`child·${c.name || '(unnamed)'}`)
     }
 
-    return { index: sel.index, cp, usage: refs.join('、') }
+    return { index: sel.index, cp, usage: refs.join(t('sep')) }
 })
 
 /** 选中 child 的子定义概要（只读展示；子定义本体的模块编辑待后续）。 */
@@ -86,10 +80,10 @@ const childSummary = computed(() => {
 
 const blendings: BlendMode[] = ['additive', 'translucent', 'normal', 'alphatocoverage', 'disabled']
 
-const animationModes = [
-    { value: 'sequence', label: 'sequence 序列' },
-    { value: 'randomframe', label: 'randomframe 随机帧' },
-] as const
+const animationModes = computed(() => [
+    { value: 'sequence', label: t('anim.sequence') },
+    { value: 'randomframe', label: t('anim.randomframe') },
+])
 
 const DEG = 180 / Math.PI
 const deg = (rad: number): number => Number((rad * DEG).toFixed(1))
@@ -163,22 +157,22 @@ function startResize(e: PointerEvent): void {
     >
       <!-- 系统级属性 -->
       <template v-if="editor.selected.kind === 'system'">
-        <h2>系统 System</h2>
+        <h2>{{ t('panel.system') }}</h2>
         <div class="param">
-          <label>名称</label><input
+          <label>{{ t('panel.name') }}</label><input
             v-model="editor.def.name"
             type="text"
             spellcheck="false"
           >
         </div>
         <div class="param">
-          <label>Max Count</label><input
+          <label>{{ t('panel.maxCount') }}</label><input
             v-model.number="editor.def.maxCount"
             type="number"
           >
         </div>
         <div class="param">
-          <label>Start Time（预热）</label><input
+          <label>{{ t('panel.startTime') }}</label><input
             v-model.number="editor.def.startTime"
             type="number"
             step="0.5"
@@ -186,7 +180,7 @@ function startResize(e: PointerEvent): void {
           >
         </div>
         <div class="param">
-          <label title="WE animationmode：序列播放或随机帧">动画模式</label>
+          <label :title="t('panel.animationModeTip')">{{ t('panel.animationMode') }}</label>
           <select v-model="editor.def.animationMode">
             <option
               v-for="m in animationModes"
@@ -198,7 +192,7 @@ function startResize(e: PointerEvent): void {
           </select>
         </div>
         <div class="param">
-          <label title="WE sequencemultiplier：序列播放速率倍数">序列倍率</label><input
+          <label :title="t('panel.sequenceMultiplierTip')">{{ t('panel.sequenceMultiplier') }}</label><input
             v-model.number="editor.def.sequenceMultiplier"
             type="number"
             step="0.1"
@@ -206,7 +200,7 @@ function startResize(e: PointerEvent): void {
           >
         </div>
         <div class="param">
-          <label>混合 Blending</label>
+          <label>{{ t('panel.blending') }}</label>
           <select v-model="editor.def.material.blending">
             <option
               v-for="b in blendings"
@@ -218,19 +212,19 @@ function startResize(e: PointerEvent): void {
           </select>
         </div>
         <div class="param">
-          <label title="颜色混合 BlendMode（colorBlendMode）">颜色混合</label>
+          <label :title="t('panel.colorBlendingTip')">{{ t('panel.colorBlending') }}</label>
           <select v-model="editor.def.material.colorBlendMode">
             <option
               v-for="m in COLOR_BLEND_MODES"
               :key="m.value"
               :value="m.value"
             >
-              {{ m.value }} · {{ m.label }}
+              {{ m.value }} · {{ blendModeLabel(m) }}
             </option>
           </select>
         </div>
         <div class="param">
-          <label>原点 Origin</label>
+          <label>{{ t('panel.origin') }}</label>
           <div class="vec3">
             <span
               v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
@@ -247,37 +241,37 @@ function startResize(e: PointerEvent): void {
           </div>
         </div>
         <p class="tip">
-          控制点在左侧树「控制点」一栏选择编辑
+          {{ t('panel.systemTip') }}
         </p>
       </template>
 
       <!-- 单个控制点属性（左侧树选中） -->
       <template v-else-if="selectedCp">
-        <h2>控制点 <code>cp{{ selectedCp.index }}</code></h2>
+        <h2>{{ t('panel.controlPoint') }} <code>cp{{ selectedCp.index }}</code></h2>
         <p class="tip">
-          lock = 跟随鼠标（WE locktopointer）；角度 = WE「控制点角度」（°，ZYX），旋转 vortex 轴/attract 原点；自转 = 角度进动速度（°/s，预览扩展）
+          {{ t('panel.cpTip') }}
         </p>
         <p
           v-if="selectedCp.usage"
           class="tip"
         >
-          引用：{{ selectedCp.usage }}
+          {{ t('panel.referencedBy', { usage: selectedCp.usage }) }}
         </p>
         <p
           v-else
           class="tip"
         >
-          未被任何模块引用
+          {{ t('panel.notReferenced') }}
         </p>
         <div class="param">
-          <label>锁定鼠标</label>
+          <label>{{ t('panel.lockMouse') }}</label>
           <label class="cp-lock"><input
             v-model="selectedCp.cp.lockToPointer"
             type="checkbox"
-          >跟随指针（locktopointer）</label>
+          >{{ t('panel.followPointer') }}</label>
         </div>
         <div class="param">
-          <label>偏移 Offset</label>
+          <label>{{ t('panel.offset') }}</label>
           <div class="vec3">
             <span
               v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
@@ -294,9 +288,7 @@ function startResize(e: PointerEvent): void {
           </div>
         </div>
         <div class="param">
-          <label
-            title="控制点角度（°，ZYX 欧拉）——旋转 vortex 轴/attract 原点"
-          >角度 Angles</label>
+          <label :title="t('panel.anglesTip')">{{ t('panel.angles') }}</label>
           <div class="vec3">
             <span
               v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
@@ -313,9 +305,7 @@ function startResize(e: PointerEvent): void {
           </div>
         </div>
         <div class="param">
-          <label
-            title="角度自转速度（°/s）——线性进动，对应 WE controlpointangle 动画轨道"
-          >自转 Spin</label>
+          <label :title="t('panel.spinTip')">{{ t('panel.spin') }}</label>
           <div class="vec3">
             <span
               v-for="(axis, j) in (['X', 'Y', 'Z'] as const)"
@@ -337,31 +327,31 @@ function startResize(e: PointerEvent): void {
       <template v-else-if="selectedChild">
         <h2>Child <code>{{ selectedChild.name || '(unnamed)' }}</code></h2>
         <p class="tip">
-          子系统声明（WE children 项）；子定义作为独立资产，点下方按钮载入编辑器单独修改与导出。
+          {{ t('panel.childTip') }}
         </p>
         <button
           v-if="selectedChild.def"
           class="open-child"
           @click="openSelectedChild()"
         >
-          在编辑器中打开（独立编辑）
+          {{ t('panel.openChild') }}
         </button>
         <div class="param">
-          <label>Type</label><input
+          <label>{{ t('panel.type') }}</label><input
             :value="selectedChild.type"
             type="text"
             disabled
           >
         </div>
         <div class="param">
-          <label title="event 类实例数上限">Max Count</label><input
+          <label :title="t('panel.maxCountTip')">{{ t('panel.maxCount') }}</label><input
             v-model.number="selectedChild.maxCount"
             type="number"
             min="1"
           >
         </div>
         <div class="param">
-          <label>Probability</label><input
+          <label>{{ t('panel.probability') }}</label><input
             v-model.number="selectedChild.probability"
             type="number"
             step="0.05"
@@ -370,7 +360,7 @@ function startResize(e: PointerEvent): void {
           >
         </div>
         <div class="param">
-          <label>CP Start</label><input
+          <label>{{ t('panel.cpStart') }}</label><input
             v-model.number="selectedChild.controlPointStartIndex"
             type="number"
             min="0"
@@ -378,7 +368,7 @@ function startResize(e: PointerEvent): void {
           >
         </div>
         <div class="param">
-          <label>Origin</label>
+          <label>{{ t('panel.origin') }}</label>
           <div class="vec3">
             <span
               v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
@@ -395,7 +385,7 @@ function startResize(e: PointerEvent): void {
           </div>
         </div>
         <div class="param">
-          <label>Scale</label>
+          <label>{{ t('panel.scale') }}</label>
           <div class="vec3">
             <span
               v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
@@ -412,7 +402,7 @@ function startResize(e: PointerEvent): void {
           </div>
         </div>
         <div class="param">
-          <label>Angles</label>
+          <label>{{ t('panel.angles') }}</label>
           <div class="vec3">
             <span
               v-for="(axis, i) in (['X', 'Y', 'Z'] as const)"
@@ -430,7 +420,7 @@ function startResize(e: PointerEvent): void {
         </div>
         <template v-if="childSummary">
           <h3 class="sub">
-            子定义概要
+            {{ t('panel.childSummary') }}
           </h3>
           <p class="tip">
             max {{ childSummary.maxCount.toLocaleString() }} · emitter {{ childSummary.emitters }} · initializer {{ childSummary.initializers }} · operator {{ childSummary.operators }} · renderer {{ childSummary.renderers }}<template v-if="childSummary.children">
@@ -442,25 +432,30 @@ function startResize(e: PointerEvent): void {
 
       <!-- 模块属性（注册表驱动） -->
       <template v-else-if="selectedModule && spec">
-        <h2>{{ kindLabels[selectedModule.kind] }} <code>{{ selectedModule.mod.name }}</code></h2>
+        <h2>
+          {{ t(`kind.${selectedModule.kind}`) }} <code
+            :title="selectedModule.mod.name"
+          >{{ moduleLabel(selectedModule.kind, selectedModule.mod.name, selectedModule.mod.name) }}</code>
+        </h2>
         <p
-          v-if="spec.description"
+          v-if="moduleDescription(selectedModule.kind, selectedModule.mod.name, spec.description)"
           class="tip"
         >
-          {{ spec.description }}
+          {{ moduleDescription(selectedModule.kind, selectedModule.mod.name, spec.description) }}
         </p>
         <ParamControl
           v-for="p in spec.params"
           :key="p.key"
           v-model="selectedModule.mod[p.key]"
           :spec="p"
+          :label-text="paramLabel(selectedModule.kind, selectedModule.mod.name, p)"
         />
       </template>
 
       <template v-else>
-        <h2>{{ selectedModule ? kindLabels[selectedModule.kind] : '属性' }}</h2>
+        <h2>{{ selectedModule ? t(`kind.${selectedModule.kind}`) : t('panel.properties') }}</h2>
         <p class="tip">
-          未注册的模块 "{{ selectedModule?.mod.name }}"：字段保留（兼容 WE round-trip），但无参数面板。
+          {{ t('panel.unregistered', { name: selectedModule?.mod.name ?? '' }) }}
         </p>
       </template>
     </aside>

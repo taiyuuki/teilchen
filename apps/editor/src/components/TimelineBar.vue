@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { editor, resetSystem, stepFrame, togglePaused } from '../store.ts'
+import { t } from '../i18n.ts'
 </script>
 
 <template>
@@ -11,10 +12,10 @@ import { editor, resetSystem, stepFrame, togglePaused } from '../store.ts'
       {{ editor.paused ? '▶' : '⏸' }}
     </button>
     <button @click="stepFrame()">
-      ⏯ 单步
+      ⏯ {{ t('timeline.step') }}
     </button>
     <button @click="resetSystem()">
-      ↺ 重置
+      ↺ {{ t('timeline.reset') }}
     </button>
     <div class="readout">
       <span>fps <b>{{ editor.stats.fps || '—' }}</b></span>
@@ -25,11 +26,11 @@ import { editor, resetSystem, stepFrame, togglePaused } from '../store.ts'
     <div class="spacer" />
     <label
       class="gizmo-toggle"
-      title="关闭时只显示被引用/有偏移/锁定的控制点"
+      :title="t('timeline.showAllCpsTip')"
     ><input
       v-model="editor.showAllCps"
       type="checkbox"
-    >全部控制点</label>
+    >{{ t('timeline.showAllCps') }}</label>
     <label class="gizmo-toggle"><input
       v-model="editor.gizmos"
       type="checkbox"

@@ -1,0 +1,366 @@
+/**
+ * 编辑器 i18n：轻量 reactive 方案，不引第三方库。
+ * locale 挂在 reactive 上，t() 在渲染中调用即随 locale 切换刷新；
+ * 持久化到 localStorage，首次进入跟随浏览器语言。
+ * core 注册表的模块描述/混合中英标签不做侵入式改造，en 侧用 SPEC_EN 覆盖层翻译。
+ */
+import { reactive } from 'vue'
+import type { ModuleKind, ParamSpec } from '@teilchen/core'
+
+export type Locale = 'en' | 'zh'
+
+const STORAGE_KEY = 'teilchen.locale.v1'
+
+function initialLocale(): Locale {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY)
+        if (saved === 'zh' || saved === 'en') return saved
+    }
+    catch { /* 隐私模式等存取异常忽略 */ }
+
+    return navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+}
+
+export const i18n = reactive({ locale: initialLocale() })
+
+export function setLocale(locale: Locale): void {
+    i18n.locale = locale
+    try { localStorage.setItem(STORAGE_KEY, locale) }
+    catch { /* 忽略 */ }
+}
+
+const messages: Record<Locale, Record<string, string>> = {
+    zh: {
+
+        // 工具栏
+        'toolbar.presets':             '预设…',
+        'toolbar.groupProgram':        '程序预设',
+        'toolbar.groupWe':             'WE 预设',
+        'toolbar.import':              '导入 WE JSON',
+        'toolbar.export':              '导出',
+        'toolbar.texHalo':             '贴图：halo',
+        'toolbar.texWhite':            '贴图：white',
+        'toolbar.texUpload':           '贴图：上传图片…',
+        'toolbar.texImport':           '贴图：导入 .tex（WE）…',
+
+        // 预设
+        'preset.fountain':             'fountain',
+        'preset.galaxy':               'galaxy',
+        'preset.snow':                 'snow',
+        'preset.cursor-avoid':         'cursor avoid',
+        'preset.empty':                '空白系统',
+        'we.magic_vortex_orb':         'magic vortex orb · 控制点/涡旋/拖尾',
+        'we.fireworks2':               'fireworks · 子粒子/事件',
+        'we.fireflies':                'fireflies · 湍流/振荡',
+        'we.dripping_water':           'dripping water · ropetrail/折射',
+        'we.bubbles1':                 'bubbles · 半透明基础',
+        'we.dna':                      'dna · 涡旋/变色',
+
+        // 左侧树
+        'sec.emitter':                 '发射器',
+        'sec.initializer':             '初始化器',
+        'sec.operator':                '操作符',
+        'sec.renderer':                '渲染器',
+        'add.emitter':                 '+ 添加发射器…',
+        'add.initializer':             '+ 添加初始化器…',
+        'add.operator':                '+ 添加操作符…',
+        'add.renderer':                '+ 添加渲染器…',
+        'tree.controlPoints':          '控制点',
+        'tree.unimplementedSuffix':    '（未实现）',
+        'badge.unimplemented':         '未实现',
+        'badge.unimplementedTip':      'GPU 未实现，将跳过',
+        'badge.idle':                  '空闲',
+        'badge.idleTip':               '未被引用且无偏移/角度',
+        'badge.notLoaded':             '未加载',
+        'badge.notLoadedTip':          '子定义未加载（本地 /we 资产缺失）',
+        'action.delete':               '删除',
+
+        // 时间栏
+        'timeline.step':               '单步',
+        'timeline.reset':              '重置',
+        'timeline.showAllCps':         '全部控制点',
+        'timeline.showAllCpsTip':      '关闭时只显示被引用/有偏移/锁定的控制点',
+
+        // 属性面板：系统
+        'panel.system':                '系统',
+        'panel.name':                  '名称',
+        'panel.maxCount':              '最大数量',
+        'panel.startTime':             '预热时间',
+        'panel.animationMode':         '动画模式',
+        'panel.animationModeTip':      'WE animationmode：序列播放或随机帧',
+        'anim.sequence':               'sequence 序列',
+        'anim.randomframe':            'randomframe 随机帧',
+        'panel.sequenceMultiplier':    '序列倍率',
+        'panel.sequenceMultiplierTip': 'WE sequencemultiplier：序列播放速率倍数',
+        'panel.blending':              '混合',
+        'panel.colorBlending':         '颜色混合',
+        'panel.colorBlendingTip':      '颜色混合 BlendMode（colorBlendMode）',
+        'panel.origin':                '原点',
+        'panel.systemTip':             '控制点在左侧树「控制点」一栏选择编辑',
+
+        // 属性面板：控制点
+        'panel.controlPoint':          '控制点',
+        'panel.cpTip':                 'lock = 跟随鼠标（WE locktopointer）；角度 = WE「控制点角度」（°，ZYX），旋转 vortex 轴/attract 原点；自转 = 角度进动速度（°/s，预览扩展）',
+        'panel.referencedBy':          '引用：{usage}',
+        'panel.notReferenced':         '未被任何模块引用',
+        'panel.lockMouse':             '锁定鼠标',
+        'panel.followPointer':         '跟随指针（locktopointer）',
+        'panel.offset':                '偏移',
+        'panel.angles':                '角度',
+        'panel.anglesTip':             '控制点角度（°，ZYX 欧拉）——旋转 vortex 轴/attract 原点',
+        'panel.spin':                  '自转',
+        'panel.spinTip':               '角度自转速度（°/s）——线性进动，对应 WE controlpointangle 动画轨道',
+
+        // 属性面板：child
+        'panel.childTip':              '子系统声明（WE children 项）；子定义作为独立资产，点下方按钮载入编辑器单独修改与导出。',
+        'panel.openChild':             '在编辑器中打开（独立编辑）',
+        'panel.childSummary':          '子定义概要',
+        'panel.type':                  '类型',
+        'panel.probability':           '出现概率',
+        'panel.cpStart':               '控制点起始',
+        'panel.scale':                 '缩放',
+        'panel.maxCountTip':           'event 类实例数上限',
+
+        // 属性面板：模块
+        'kind.emitter':                '发射器',
+        'kind.initializer':            '初始化器',
+        'kind.operator':               '操作符',
+        'kind.renderer':               '渲染器',
+        'panel.properties':            '属性',
+        'panel.unregistered':          '未注册的模块 "{name}"：字段保留（兼容 WE round-trip），但无参数面板。',
+        'param.tip':                   '{label}（{key}）',
+
+        // 警告
+        'warn.wePresetUnavailable':    'WE 预设 {file} 不可用（需要 dev 模式的 /we 资产托管）',
+        'warn.wePresetFailed':         'WE 预设 {file} 加载失败: {msg}',
+        'warn.texDescFailed':          '.tex.json 描述解析失败: {msg}，按默认通道语义',
+        'warn.texFailed':              '.tex 解析失败: {msg}',
+        'warn.texLoadFailed':          '贴图 {tex} 加载失败: {msg}',
+
+        // 通用
+        'sep': '、',
+    },
+    en: {
+
+        // toolbar
+        'toolbar.presets':             'Presets…',
+        'toolbar.groupProgram':        'Built-in presets',
+        'toolbar.groupWe':             'WE presets',
+        'toolbar.import':              'Import WE JSON',
+        'toolbar.export':              'Export',
+        'toolbar.texHalo':             'Texture: halo',
+        'toolbar.texWhite':            'Texture: white',
+        'toolbar.texUpload':           'Texture: upload image…',
+        'toolbar.texImport':           'Texture: import .tex (WE)…',
+
+        // presets
+        'preset.fountain':             'fountain',
+        'preset.galaxy':               'galaxy',
+        'preset.snow':                 'snow',
+        'preset.cursor-avoid':         'cursor avoid',
+        'preset.empty':                'Empty system',
+        'we.magic_vortex_orb':         'magic vortex orb · control points/vortex/trail',
+        'we.fireworks2':               'fireworks · child particles/events',
+        'we.fireflies':                'fireflies · turbulence/oscillation',
+        'we.dripping_water':           'dripping water · ropetrail/refraction',
+        'we.bubbles1':                 'bubbles · translucent basics',
+        'we.dna':                      'dna · vortex/color shift',
+
+        // module tree
+        'sec.emitter':                 'Emitters',
+        'sec.initializer':             'Initializers',
+        'sec.operator':                'Operators',
+        'sec.renderer':                'Renderers',
+        'add.emitter':                 '+ Add emitter…',
+        'add.initializer':             '+ Add initializer…',
+        'add.operator':                '+ Add operator…',
+        'add.renderer':                '+ Add renderer…',
+        'tree.controlPoints':          'Control Points',
+        'tree.unimplementedSuffix':    ' (not implemented)',
+        'badge.unimplemented':         'N/A',
+        'badge.unimplementedTip':      'Not GPU-implemented, will be skipped',
+        'badge.idle':                  'idle',
+        'badge.idleTip':               'Not referenced, no offset/angles',
+        'badge.notLoaded':             'not loaded',
+        'badge.notLoadedTip':          'Child definition not loaded (local /we assets missing)',
+        'action.delete':               'Delete',
+
+        // timeline
+        'timeline.step':               'Step',
+        'timeline.reset':              'Reset',
+        'timeline.showAllCps':         'All control points',
+        'timeline.showAllCpsTip':      'When off, only referenced/offset/locked control points are shown',
+
+        // property panel: system
+        'panel.system':                'System',
+        'panel.name':                  'Name',
+        'panel.maxCount':              'Max Count',
+        'panel.startTime':             'Start Time (warmup)',
+        'panel.animationMode':         'Animation Mode',
+        'panel.animationModeTip':      'WE animationmode: sequence playback or random frame',
+        'anim.sequence':               'sequence',
+        'anim.randomframe':            'random frame',
+        'panel.sequenceMultiplier':    'Sequence Multiplier',
+        'panel.sequenceMultiplierTip': 'WE sequencemultiplier: sequence playback rate multiplier',
+        'panel.blending':              'Blending',
+        'panel.colorBlending':         'Color Blending',
+        'panel.colorBlendingTip':      'Color blend mode (colorBlendMode)',
+        'panel.origin':                'Origin',
+        'panel.systemTip':             'Control points are edited in the "Control Points" section of the tree on the left',
+
+        // property panel: control point
+        'panel.controlPoint':          'Control Point',
+        'panel.cpTip':                 'lock = follow the mouse (WE locktopointer); angles = WE control point angles (°, ZYX), rotating the vortex axis / attract origin; spin = angle precession speed (°/s, preview extension)',
+        'panel.referencedBy':          'Referenced by: {usage}',
+        'panel.notReferenced':         'Not referenced by any module',
+        'panel.lockMouse':             'Lock to mouse',
+        'panel.followPointer':         'Follow pointer (locktopointer)',
+        'panel.offset':                'Offset',
+        'panel.angles':                'Angles',
+        'panel.anglesTip':             'Control point angles (°, ZYX Euler) — rotates the vortex axis / attract origin',
+        'panel.spin':                  'Spin',
+        'panel.spinTip':               'Angular spin speed (°/s) — linear precession, maps to the WE controlpointangle track',
+
+        // property panel: child
+        'panel.childTip':              'Child system declaration (WE children entry); the child definition is an independent asset — click the button below to load it into the editor for separate editing and export.',
+        'panel.openChild':             'Open in editor (edit independently)',
+        'panel.childSummary':          'Child definition summary',
+        'panel.type':                  'Type',
+        'panel.probability':           'Probability',
+        'panel.cpStart':               'CP Start',
+        'panel.scale':                 'Scale',
+        'panel.maxCountTip':           'Max instances for event-type children',
+
+        // property panel: module
+        'kind.emitter':                'Emitter',
+        'kind.initializer':            'Initializer',
+        'kind.operator':               'Operator',
+        'kind.renderer':               'Renderer',
+        'panel.properties':            'Properties',
+        'panel.unregistered':          'Unregistered module "{name}": fields are kept (WE round-trip compatible) but there is no parameter panel.',
+        'param.tip':                   '{label} ({key})',
+
+        // warnings
+        'warn.wePresetUnavailable':    'WE preset {file} unavailable (requires the dev-mode /we asset hosting)',
+        'warn.wePresetFailed':         'Failed to load WE preset {file}: {msg}',
+        'warn.texDescFailed':          'Failed to parse .tex.json descriptor: {msg}; falling back to default channel semantics',
+        'warn.texFailed':              'Failed to parse .tex: {msg}',
+        'warn.texLoadFailed':          'Failed to load texture {tex}: {msg}',
+
+        // common
+        'sep': ', ',
+    },
+}
+
+/** 取文案（缺失回退 zh，再回退 key 本身）；params 替换 {name} 占位。 */
+export function t(key: string, params?: Record<string, number | string>): string {
+    let s = messages[i18n.locale][key] ?? messages.zh[key] ?? key
+    if (params) {
+        for (const [k, v] of Object.entries(params)) s = s.replaceAll(`{${k}}`, String(v))
+    }
+
+    return s
+}
+
+// ---------------------------------------------------------------- core 注册表文案（en/zh 覆盖层）
+
+/** zh 下的模块名（添加模块下拉）；en 剔除标签里的中文。key = `${kind}:${name}`。 */
+const LABEL_ZH: Record<string, string> = {
+
+    // emitters
+    'emitter:boxrandom':                           '盒随机',
+    'emitter:sphererandom':                        '球随机',
+
+    // initializers
+    'initializer:lifetimerandom':                  '随机生命周期',
+    'initializer:sizerandom':                      '随机大小',
+    'initializer:alpharandom':                     '随机透明度',
+    'initializer:colorrandom':                     '随机颜色',
+    'initializer:velocityrandom':                  '随机速度',
+    'initializer:rotationrandom':                  '随机旋转',
+    'initializer:angularvelocityrandom':           '随机角速度',
+    'initializer:turbulentvelocityrandom':         '随机湍流速度',
+    'initializer:hsvcolorrandom':                  'HSV 随机颜色',
+    'initializer:mapsequencebetweencontrolpoints': '控制点间序列映射',
+    'initializer:mapsequencearoundcontrolpoint':   '控制点环绕序列映射',
+
+    // operators
+    'operator:movement':                           '移动',
+    'operator:angularmovement':                    '角运动',
+    'operator:alphafade':                          '透明度淡入淡出',
+    'operator:alphachange':                        '透明度变化（乘数）',
+    'operator:sizechange':                         '大小变化（乘数）',
+    'operator:colorchange':                        '颜色变化（乘数）',
+    'operator:oscillatealpha':                     '透明度振荡',
+    'operator:oscillatesize':                      '大小振荡',
+    'operator:oscillateposition':                  '位置振荡',
+    'operator:turbulence':                         '湍流',
+    'operator:vortex':                             '涡旋',
+    'operator:vortex_v2':                          '涡旋 V2',
+    'operator:maintaindistancetocontrolpoint':     '保持控制点距离',
+    'operator:boids':                              '群集（Boids）',
+    'operator:controlpointattract':                '控制点吸引',
+
+    // renderers
+    'renderer:sprite':                             '精灵',
+    'renderer:spritetrail':                        '精灵拖尾',
+    'renderer:rope':                               '绳索',
+    'renderer:ropetrail':                          '绳索拖尾',
+}
+
+/** en 下的模块描述/参数标签覆盖（zh 直接用注册表源文案）；key = `${kind}:${name}`。 */
+const SPEC_EN: Record<string, { desc?: string, params?: Record<string, string> }> = {
+    'emitter:boxrandom': {
+        desc:   'Random points inside a box; initial velocity is radial (along the position vector)',
+        params: { sign: 'Sign' },
+    },
+    'emitter:sphererandom': {
+        desc:   'Random-direction emission inside a sphere/disc (distancemin/max are radii)',
+        params: { sign: 'Sign' },
+    },
+    'initializer:turbulentvelocityrandom':       { params: { scale: 'Cone Scale (0-1)', offset: 'Offset (around right)' } },
+    'initializer:mapsequencearoundcontrolpoint': { params: { count: 'Count (turns)', bounds: 'Bounds (angle range, turns)' } },
+    'operator:movement':                         { desc: 'Gravity + drag, semi-implicit Euler integration' },
+    'operator:alphafade':                        { desc: 'Fade in/out at the start/end of lifetime (time is normalized lifetime progress 0-1)' },
+    'operator:alphachange':                      { params: { starttime: 'Start Time (lifetime)', endtime: 'End Time (lifetime)' } },
+    'operator:sizechange':                       { params: { starttime: 'Start Time (lifetime)', endtime: 'End Time (lifetime)' } },
+    'operator:colorchange':                      { params: { starttime: 'Start Time (lifetime)', endtime: 'End Time (lifetime)' } },
+    'operator:turbulence':                       { desc: 'Curl-noise flow field perturbation' },
+    'operator:vortex':                           { desc: 'Tangential force field around the control point axis (axis/offset rotate with the control point angles)' },
+    'operator:vortex_v2':                        { desc: 'WE v2 vortex (ring pull + tangential velocity replace; same GPU path as vortex)' },
+    'operator:controlpointattract':              { desc: 'Control point repulsion/attraction (scale<0 pushes away from the point, scale>0 pulls toward it)' },
+    'renderer:ropetrail':                        { params: { length: 'Length (seconds)' } },
+}
+
+/** 去掉标签里的中文部分（「Darken 变暗」→「Darken」；「无（None）」→「None」）。 */
+function stripCjk(s: string): string {
+    return s.replace(/[\u4e00-\u9fff]/g, '').replace(/[（）]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+/** 模块名（添加下拉等）：zh 取覆盖表，en 剔除中文（如「Alpha Change（乘数）」→「Alpha Change」）。 */
+export function moduleLabel(kind: ModuleKind, name: string, fallback: string): string {
+    if (i18n.locale === 'zh') return LABEL_ZH[`${kind}:${name}`] ?? fallback
+
+    return stripCjk(fallback)
+}
+
+/** 模块描述：en 优先取覆盖层（zh 用注册表源文案）。 */
+export function moduleDescription(kind: ModuleKind, name: string, fallback?: string): string | undefined {
+    if (i18n.locale !== 'en') return fallback
+
+    return SPEC_EN[`${kind}:${name}`]?.desc ?? fallback
+}
+
+/** 参数标签：en 优先取覆盖层，否则剔除中文。 */
+export function paramLabel(kind: ModuleKind, name: string, p: ParamSpec): string {
+    if (i18n.locale !== 'en') return p.label
+
+    return SPEC_EN[`${kind}:${name}`]?.params?.[p.key] ?? stripCjk(p.label)
+}
+
+/** colorBlendMode 选项标签。 */
+export function blendModeLabel(m: { value: number, label: string }): string {
+    return i18n.locale === 'en' ? stripCjk(m.label) : m.label
+}

@@ -18,6 +18,7 @@ import {
     snowPreset,
 } from '@teilchen/core'
 import { ParticleRuntime, type SystemHandle, type TextureAsset, createHaloTexture, createTextureFromTex, createTextureFromUrl, createWhiteTexture  } from '@teilchen/runtime'
+import { t } from './i18n.ts'
 
 export type Selection = { kind: 'child', index: number } | { kind: 'cp', index: number } | { kind: 'system' } | { kind: ModuleKind, index: number }
 
@@ -39,21 +40,21 @@ function emptyPreset(): ParticleSystemDef {
 }
 
 export const PRESET_DEFS = [
-    { id: 'fountain', label: 'fountain', load: fountainPreset },
-    { id: 'galaxy', label: 'galaxy', load: galaxyPreset },
-    { id: 'snow', label: 'snow', load: snowPreset },
-    { id: 'cursor-avoid', label: 'cursor avoid', load: cursorAvoidPreset },
-    { id: 'empty', label: '空白系统', load: emptyPreset },
+    { id: 'fountain', labelKey: 'preset.fountain', load: fountainPreset },
+    { id: 'galaxy', labelKey: 'preset.galaxy', load: galaxyPreset },
+    { id: 'snow', labelKey: 'preset.snow', load: snowPreset },
+    { id: 'cursor-avoid', labelKey: 'preset.cursor-avoid', load: cursorAvoidPreset },
+    { id: 'empty', labelKey: 'preset.empty', load: emptyPreset },
 ]
 
 /** 精选 WE 预设（覆盖不同特性轴；完整清单不进编辑器，需要时用「导入 WE JSON」）。 */
 export const WE_PRESET_DEFS = [
-    { file: 'magic_vortex_orb', label: 'magic vortex orb · 控制点/涡旋/拖尾' },
-    { file: 'fireworks2', label: 'fireworks · 子粒子/事件' },
-    { file: 'fireflies', label: 'fireflies · 湍流/振荡' },
-    { file: 'dripping_water', label: 'dripping water · ropetrail/折射' },
-    { file: 'bubbles1', label: 'bubbles · 半透明基础' },
-    { file: 'dna', label: 'dna · 涡旋/变色' },
+    { file: 'magic_vortex_orb', labelKey: 'we.magic_vortex_orb' },
+    { file: 'fireworks2', labelKey: 'we.fireworks2' },
+    { file: 'fireflies', labelKey: 'we.fireflies' },
+    { file: 'dripping_water', labelKey: 'we.dripping_water' },
+    { file: 'bubbles1', labelKey: 'we.bubbles1' },
+    { file: 'dna', labelKey: 'we.dna' },
 ]
 
 export const editor = reactive({
@@ -229,14 +230,14 @@ export async function loadWePreset(file: string): Promise<void> {
     try {
         const res = await fetch(`/we/presets/${file}.json`)
         if (!res.ok) {
-            pushWarning(`WE 预设 ${file} 不可用（需要 dev 模式的 /we 资产托管）`)
+            pushWarning(t('warn.wePresetUnavailable', { file }))
 
             return
         }
         await importWeJson(await res.text())
     }
     catch(err) {
-        pushWarning(`WE 预设 ${file} 加载失败: ${(err as Error).message}`)
+        pushWarning(t('warn.wePresetFailed', { file, msg: (err as Error).message }))
     }
 }
 
@@ -318,7 +319,7 @@ export async function loadWeTexture(texPath: string): Promise<boolean> {
         return true
     }
     catch(err) {
-        pushWarning(`[import] 贴图 ${texPath} 加载失败: ${(err as Error).message}`)
+        pushWarning(t('warn.texLoadFailed', { tex: texPath, msg: (err as Error).message }))
 
         return false
     }
@@ -359,14 +360,14 @@ export async function setTexture(name: TextureChoice, file?: File, descriptorFil
                 if (typeof desc.alphachannelpriority === 'boolean') alphaPriority = desc.alphachannelpriority
             }
             catch(err) {
-                pushWarning(`.tex.json 描述解析失败: ${(err as Error).message}，按默认通道语义`)
+                pushWarning(t('warn.texDescFailed', { msg: (err as Error).message }))
             }
         }
         try {
             tex = await createTextureFromTex(runtime.device, await file.arrayBuffer(), file.name, alphaPriority)
         }
         catch(err) {
-            pushWarning(`.tex 解析失败: ${(err as Error).message}`)
+            pushWarning(t('warn.texFailed', { msg: (err as Error).message }))
 
             return
         }

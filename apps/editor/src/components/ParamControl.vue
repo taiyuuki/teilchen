@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ParamSpec, ParamValue, Vec3 } from '@teilchen/core'
+import { t } from '../i18n.ts'
 
-const props = defineProps<{ spec: ParamSpec, modelValue: ParamValue | undefined }>()
+const props = defineProps<{ spec: ParamSpec, modelValue: ParamValue | undefined, labelText?: string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: ParamValue): void }>()
+
+const label = computed(() => props.labelText ?? props.spec.label)
 
 function asVec3(v: ParamValue | undefined): Vec3 {
     if (Array.isArray(v)) return v as Vec3
@@ -64,7 +67,7 @@ function onColor(e: Event): void {
     class="param"
     :data-type="spec.type"
   >
-    <label :title="`${spec.label}（${spec.key}）`">{{ spec.label }}</label>
+    <label :title="t('param.tip', { label, key: spec.key })">{{ label }}</label>
     <div
       v-if="spec.type === 'float' || spec.type === 'int'"
       class="scalar"
