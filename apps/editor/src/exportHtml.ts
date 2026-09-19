@@ -5,7 +5,7 @@
  */
 import playerBundle from '@teilchen/runtime/dist/player.global.js?raw'
 import type { SceneFile } from '@teilchen/runtime'
-import { editor, getTextureSource } from './store.ts'
+import { editor, getRootTexturePath, getTextureAssets } from './store.ts'
 import { t } from './i18n.ts'
 
 function bytesToBase64(bytes: ArrayBuffer): string {
@@ -40,18 +40,19 @@ function htmlEscape(text: string): string {
 
 export function buildStandaloneHtml(): string {
     const def = JSON.parse(JSON.stringify(editor.def)) as typeof editor.def
-    const src = getTextureSource()
 
     // 资产表：key = 贴图路径（player 的 bufferSource 按 key/basename 兜底查找）。
-    // 上传图/.tex 的文件名与 def.material.textures[0] 无关 → 导出时把引用改写到嵌入路径。
+    // 全量登记表（根 + 各层 children）；上传图/.tex 的文件名与材质引用无关 →
+    // 根系统引用改写到登记键，children 引用本身即登记键无需改写。
     const assets: Record<string, { data: string }> = {}
-    if (src) {
-        assets[src.path] = { data: bytesToBase64(src.data) }
-        if (src.alphaPriority === false) {
-            assets[`${src.path}.json`] = { data: stringToBase64(JSON.stringify({ alphachannelpriority: false })) }
+    for (const a of getTextureAssets()) {
+        assets[a.path] = { data: bytesToBase64(a.data) }
+        if (a.alphaPriority === false) {
+            assets[`${a.path}.json`] = { data: stringToBase64(JSON.stringify({ alphachannelpriority: false })) }
         }
-        def.material.textures = [src.path, ...def.material.textures.slice(1)]
     }
+    const rootPath = getRootTexturePath()
+    if (rootPath) def.material.textures = [rootPath, ...def.material.textures.slice(1)]
 
     const scene: SceneFile = {
         format:  'teilchen/scene',

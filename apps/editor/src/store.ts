@@ -28,8 +28,8 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null
 let currentTexture: GPUTexture | null = null
 
 /**
- * 当前贴图的源字节（导出独立 HTML 时内嵌用；GPU 贴图无法回读源数据）。
- * halo/white 程序化贴图为 null（导出产物由 player 自动生成同款）。
+ * 贴图源字节登记表（导出独立 HTML 时内嵌用；GPU 贴图无法回读源数据）。
+ * key = 材质引用路径（WE 贴图）或文件名（上传图）；halo/white 程序化贴图不登记。
  */
 export interface TextureSourceInfo {
     path: string
@@ -38,14 +38,78 @@ export interface TextureSourceInfo {
     /** 仅 .tex：rg88/r8 的通道语义描述（false 时导出产物附带 .json 描述）。 */
     alphaPriority?: boolean
 }
-let textureSource: TextureSourceInfo | null = null
+const textureAssets = new Map<string, TextureSourceInfo>()
+let rootTexturePath: string | null = null
 
-export function getTextureSource(): TextureSourceInfo | null {
-    return textureSource
+/** 登记一份贴图源字节（loadWeTexture/setTexture/children 收集共用）。 */
+export function registerTextureAsset(info: TextureSourceInfo): void {
+    textureAssets.set(info.path, info)
 }
 
-function setTextureSource(src: TextureSourceInfo | null): void {
-    textureSource = src
+/** 全部已登记贴图（含根系统与各层 children）。 */
+export function getTextureAssets(): TextureSourceInfo[] {
+    return [...textureAssets.values()]
+}
+
+/** 根系统当前贴图的登记键（null = halo/white/未加载）。 */
+export function getRootTexturePath(): string | null {
+    return rootTexturePath
+}
+
+/** 供测试/工具流程设置根贴图登记键。 */
+export function setRootTexturePath(path: string | null): void {
+    rootTexturePath = path
+}
+
+/** 当前 children 的贴图（key = ChildDef.name，runtime 接线用）。 */
+let currentChildTextures: Record<string, TextureAsset> = {}
+
+/** 解码一份 /we/tex 贴图（同路径 .tex.json 描述覆盖通道语义），源字节进导出登记表。 */
+async function loadWeTextureAsset(texPath: string): Promise<TextureAsset | null> {
+    if (!runtime) return null
+    try {
+        const res = await fetch(`/we/tex/${texPath}.tex`)
+        if (!res.ok) return null
+        const data = await res.arrayBuffer()
+        let alphaPriority = true
+        try {
+            const desc = await fetch(`/we/tex/${texPath}.tex.json`).then(r => r.ok ? r.json() : null)
+            if (desc && typeof desc.alphachannelpriority === 'boolean') alphaPriority = desc.alphachannelpriority
+        }
+        catch { /* 描述缺失按默认 */ }
+        registerTextureAsset({ path: texPath, data, alphaPriority })
+
+        return await createTextureFromTex(runtime.device, data, texPath, alphaPriority)
+    }
+    catch {
+        return null
+    }
+}
+
+/** 递归收集 def 树 children 的材质贴图（按材质路径共享解码，key = ChildDef.name）。 */
+async function attachChildTextures(def: ParticleSystemDef): Promise<Record<string, TextureAsset>> {
+    if (!runtime) return {}
+    const out: Record<string, TextureAsset> = {}
+    const byPath = new Map<string, TextureAsset>()
+    const collect = async(d: ParticleSystemDef): Promise<void> => {
+        for (const child of d.children) {
+            if (!child.def) continue
+            const texPath = child.def.material.textures[0]
+            if (texPath) {
+                let asset = byPath.get(texPath)
+                if (!asset) {
+                    asset = await loadWeTextureAsset(texPath) ?? undefined
+                    if (asset) byPath.set(texPath, asset)
+                    else pushWarning(t('warn.texLoadFailed', { tex: texPath, msg: '404' }))
+                }
+                if (asset) out[child.name] = asset
+            }
+            await collect(child.def)
+        }
+    }
+    await collect(def)
+
+    return out
 }
 
 function emptyPreset(): ParticleSystemDef {
@@ -123,12 +187,15 @@ watch(() => editor.def, () => {
 export async function attachRuntime(canvas: HTMLCanvasElement): Promise<void> {
     if (runtime) return
     runtime = await ParticleRuntime.create({ canvas, onWarning: pushWarning })
-    handle = runtime.addSystem(editor.def)
+
+    // 恢复现场：children 材质贴图尽力加载（dev 的 /we 资产可用时），再建系统
+    currentChildTextures = await attachChildTextures(editor.def)
+    handle = runtime.addSystem(editor.def, Object.keys(currentChildTextures).length ? { childTextures: currentChildTextures } : {})
     runtime.start()
     editor.runtimeReady = true
     setInterval(pollStats, 250)
 
-    // 恢复现场：材质引用的 sprite 贴图尽力加载（dev 的 /we 资产可用时）
+    // 根材质引用的 sprite 贴图尽力加载
     const texPath = editor.def.material.textures[0]
     if (texPath) void loadWeTexture(texPath)
 }
@@ -175,12 +242,17 @@ function scheduleSync(): void {
     }, 120)
 }
 
-/** 整体替换 def（预设/导入），reset 重跑。 */
+/** 整体替换 def（预设/导入），reset 重跑；children 结构重建时套用当前 children 贴图。 */
 export function loadDef(def: ParticleSystemDef): void {
     const normalized = normalizeDef(def)
     editor.selected = { kind: 'system' }
     editor.def = normalized
-    if (handle) handle.update(normalized, { reset: true })
+    if (handle) {
+        handle.update(normalized, {
+            reset: true,
+            ...Object.keys(currentChildTextures).length ? { childTextures: currentChildTextures } : {},
+        })
+    }
 }
 
 export function resetSystem(): void {
@@ -271,9 +343,10 @@ export async function openChildAsSystem(index: number): Promise<void> {
     if (!child?.def) return
     const def = normalizeDef(JSON.parse(JSON.stringify(child.def)) as ParticleSystemDef)
     def.name = child.name.split('/').pop()!.replace(/\.json$/, '') || 'child'
-    loadDef(def)
 
-    // 贴图是 runtime 侧状态（不在 def 里）：切到子定义材质引用的 sprite
+    // 贴图是 runtime 侧状态（不在 def 里）：按新 def 树收集根/children 贴图
+    currentChildTextures = await attachChildTextures(def)
+    loadDef(def)
     const texPath = def.material.textures[0]
     if (texPath) await loadWeTexture(texPath)
 }
@@ -317,6 +390,7 @@ export async function importWeJson(text: string, materialText?: string): Promise
             return undefined
         }
     })
+    currentChildTextures = await attachChildTextures(def)
     loadDef(def)
 
     // 材质引用的 sprite 贴图自动加载（/we/tex/<path>.tex）
@@ -327,25 +401,16 @@ export async function importWeJson(text: string, materialText?: string): Promise
 /** 从本地 WE 资产加载 .tex 贴图并应用到当前系统（导入预设后自动套用）。 */
 export async function loadWeTexture(texPath: string): Promise<boolean> {
     if (!runtime || !handle) return false
-    try {
-        const res = await fetch(`/we/tex/${texPath}.tex`)
-        if (!res.ok) return false
-        const data = await res.arrayBuffer()
-        const tex = await createTextureFromTex(runtime.device, data, texPath)
-        const old = currentTexture
-        handle.update(editor.def, { texture: tex })
-        currentTexture = 'texture' in tex ? tex.texture : tex
-        editor.textureName = 'texture' in tex && tex.frames?.length ? 'tex-sprite' : 'tex'
-        old?.destroy()
-        setTextureSource({ path: texPath, data })
+    const asset = await loadWeTextureAsset(texPath)
+    if (!asset) return false
+    const old = currentTexture
+    handle.update(editor.def, { texture: asset })
+    currentTexture = asset.texture
+    editor.textureName = asset.frames?.length ? 'tex-sprite' : 'tex'
+    rootTexturePath = texPath
+    old?.destroy()
 
-        return true
-    }
-    catch(err) {
-        pushWarning(t('warn.texLoadFailed', { tex: texPath, msg: (err as Error).message }))
-
-        return false
-    }
+    return true
 }
 
 export function exportWeJson(): void {
@@ -389,7 +454,8 @@ export async function setTexture(name: TextureChoice, file?: File, descriptorFil
         try {
             const data = await file.arrayBuffer()
             tex = await createTextureFromTex(runtime.device, data, file.name, alphaPriority)
-            setTextureSource({ path: file.name, data, alphaPriority })
+            registerTextureAsset({ path: file.name, data, alphaPriority })
+            rootTexturePath = file.name
         }
         catch(err) {
             pushWarning(t('warn.texFailed', { msg: (err as Error).message }))
@@ -400,12 +466,13 @@ export async function setTexture(name: TextureChoice, file?: File, descriptorFil
     else {
         if (!file) return
         tex = await createTextureFromUrl(runtime.device, URL.createObjectURL(file))
-        setTextureSource({ path: file.name, data: await file.arrayBuffer() })
+        registerTextureAsset({ path: file.name, data: await file.arrayBuffer() })
+        rootTexturePath = file.name
     }
     const old = currentTexture
     handle.update(editor.def, { texture: tex })
     currentTexture = 'texture' in tex ? tex.texture : tex
     editor.textureName = name === 'tex' && 'texture' in tex && tex.frames?.length ? 'tex-sprite' : name
-    if (name === 'halo' || name === 'white') setTextureSource(null)
+    if (name === 'halo' || name === 'white') rootTexturePath = null
     old?.destroy()
 }

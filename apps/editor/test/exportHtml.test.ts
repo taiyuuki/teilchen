@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { editor } from '../src/store.ts'
+import { editor, registerTextureAsset, setRootTexturePath } from '../src/store.ts'
 import { buildStandaloneHtml } from '../src/exportHtml.ts'
 
 describe('buildStandaloneHtml（独立 HTML 导出模板）', () => {
@@ -18,7 +18,7 @@ describe('buildStandaloneHtml（独立 HTML 导出模板）', () => {
         expect(html).toContain('a\\u003c/script>b')
         expect(html).toContain('<title>a&lt;/script&gt;b</title>')
 
-        // 全文只允许模板自身的 3 个 <script>/</script> 标签对
+        // 全文只允许模板自身的 2 个 <script>/</script> 标签对
         const opens = html.match(/<script>/g)?.length ?? 0
         const closes = html.match(/<\/script>/g)?.length ?? 0
         expect(opens).toBe(2)
@@ -28,5 +28,29 @@ describe('buildStandaloneHtml（独立 HTML 导出模板）', () => {
         expect(html.length).toBeGreaterThan(100_000)
         expect(html).toContain('<canvas')
         expect(html).toContain('id="unsupported"')
+    })
+
+    it('全量嵌入贴图登记表（根 + children）并改写根引用', () => {
+        editor.def.name = 'tex-demo'
+        const bytes = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer
+        registerTextureAsset({ path: 'particle/fire/fire1', data: bytes('TEXV-root') })
+        registerTextureAsset({ path: 'particle/child/spark', data: bytes('TEXV-child'), alphaPriority: false })
+        setRootTexturePath('particle/fire/fire1')
+        try {
+            const html = buildStandaloneHtml()
+            expect(html).toContain('"particle/fire/fire1"')
+            expect(html).toContain('"particle/child/spark"')
+
+            // alphaPriority=false 的资产附带 .json 通道语义描述（base64 内嵌）
+            const descMatch = html.match(/"particle\/child\/spark\.json":{"data":"([^"]+)"}/)
+            expect(descMatch).not.toBeNull()
+            expect(atob(descMatch![1])).toBe('{"alphachannelpriority":false}')
+
+            // 根材质引用改写到登记键
+            expect(html).toContain('"textures":["particle/fire/fire1"')
+        }
+        finally {
+            setRootTexturePath(null)
+        }
     })
 })
