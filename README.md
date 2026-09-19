@@ -54,13 +54,13 @@ player.start()
 
 `apps/editor`（Vue 3）：改参数 → 防抖 120ms → `handle.update()` 重编译 GPU program 表热生效（不 reset，粒子状态保留；maxCount 变化自动重建缓冲）。
 
-- 左栏模块树（emitter/initializer/operator/renderer 增删，未实现模块带标记）
+- 左栏场景列表（多系统：新建/复制/删除/选中切换）+ 模块树（emitter/initializer/operator/renderer 增删，未实现模块带标记）
 - 右栏属性面板由 core 注册表自动生成（float/int/bool/vec3/color255/enum）
 - 系统面板：maxCount / startTime / blending / origin / 8 个 controlpoint（lock = 跟随鼠标）
 - 中央预览 + 2D gizmo overlay（emitter 范围线框、controlpoint 十字、指针圈）
 - 时间轴：播放/暂停/单步/重置、fps/alive/drawn/时间
 - 预设（与 playground 共享 `core/presets.ts`）、WE JSON 导入/导出、贴图切换（halo/white/上传图片）
-- **导出独立 HTML**：单文件内嵌 player IIFE 包 + 场景 JSON + base64 贴图，任何支持 WebGPU 的浏览器直接打开即播（文件协议亦可）
+- **导出独立 HTML**：单文件内嵌 player IIFE 包 + 场景 JSON（全部系统）+ base64 贴图，任何支持 WebGPU 的浏览器直接打开即播（文件协议亦可）
 
 ## GPU 模拟架构
 

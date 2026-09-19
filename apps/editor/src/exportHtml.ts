@@ -5,7 +5,7 @@
  */
 import playerBundle from '@teilchen/runtime/dist/player.global.js?raw'
 import type { SceneFile } from '@teilchen/runtime'
-import { editor, getRootTexturePath, getTextureAssets } from './store.ts'
+import { editor, getSceneSystems, getTextureAssets } from './store.ts'
 import { t } from './i18n.ts'
 
 function bytesToBase64(bytes: ArrayBuffer): string {
@@ -39,11 +39,10 @@ function htmlEscape(text: string): string {
 }
 
 export function buildStandaloneHtml(): string {
-    const def = JSON.parse(JSON.stringify(editor.def)) as typeof editor.def
 
     // 资产表：key = 贴图路径（player 的 bufferSource 按 key/basename 兜底查找）。
-    // 全量登记表（根 + 各层 children）；上传图/.tex 的文件名与材质引用无关 →
-    // 根系统引用改写到登记键，children 引用本身即登记键无需改写。
+    // 全量登记表（各系统根贴图 + 各层 children）；上传图/.tex 的文件名与材质引用无关 →
+    // 各系统引用改写到其登记键，children 引用本身即登记键无需改写。
     const assets: Record<string, { data: string }> = {}
     for (const a of getTextureAssets()) {
         assets[a.path] = { data: bytesToBase64(a.data) }
@@ -51,21 +50,28 @@ export function buildStandaloneHtml(): string {
             assets[`${a.path}.json`] = { data: stringToBase64(JSON.stringify({ alphachannelpriority: false })) }
         }
     }
-    const rootPath = getRootTexturePath()
-    if (rootPath) def.material.textures = [rootPath, ...def.material.textures.slice(1)]
+
+    // 场景文件：全部系统，逐系统把根材质引用改写到登记键
+    const systems = getSceneSystems().map(e => {
+        const def = JSON.parse(JSON.stringify(e.def)) as typeof editor.def
+        if (e.texturePath) def.material.textures = [e.texturePath, ...def.material.textures.slice(1)]
+
+        return def
+    })
 
     const scene: SceneFile = {
         format:  'teilchen/scene',
         version: 1,
-        systems: [def],
+        systems,
     }
+    const title = editor.systems.find(s => s.id === editor.activeId)?.def.name || 'teilchen scene'
 
     return `<!doctype html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${htmlEscape(def.name || 'teilchen scene')}</title>
+<title>${htmlEscape(title)}</title>
 <style>
   html, body { margin: 0; height: 100%; background: #04050a; overflow: hidden; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }

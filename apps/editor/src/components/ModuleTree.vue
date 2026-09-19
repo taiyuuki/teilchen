@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { GPU_SUPPORTED, type ModuleKind, getModulesByKind } from '@teilchen/core'
-import { addModule, editor, isCpActive, removeModule, selectModule } from '../store.ts'
+import { addModule, addSystemToScene, duplicateSystem, editor, isCpActive, removeModule, removeSystem, selectModule, selectSystem } from '../store.ts'
 import { moduleLabel, t } from '../i18n.ts'
 
 const sections: { kind: ModuleKind }[] = [
@@ -43,14 +43,41 @@ function selectCp(index: number): void {
 
 <template>
   <aside class="panel tree">
-    <div
-      class="sys-row"
-      :class="{ active: editor.selected.kind === 'system' }"
-      @click="editor.selected = { kind: 'system' }"
-    >
-      <span class="sys-icon">◈</span>{{ editor.def.name || 'untitled' }}
-      <span class="sys-meta">{{ editor.def.maxCount.toLocaleString() }}</span>
-    </div>
+    <section class="scene">
+      <h3>
+        {{ t('sec.scene') }} <em>{{ editor.systems.length }}</em>
+        <button
+          class="scene-add"
+          :title="t('scene.add')"
+          @click="addSystemToScene()"
+        >＋</button>
+      </h3>
+      <ul>
+        <li
+          v-for="s in editor.systems"
+          :key="s.id"
+          :class="{ active: s.id === editor.activeId }"
+          @click="selectSystem(s.id)"
+        >
+          <span
+            class="mod-name"
+            :title="s.def.name"
+          >{{ s.def.name || 'untitled' }}</span>
+          <span class="sys-meta">{{ s.def.maxCount.toLocaleString() }}</span>
+          <button
+            class="rm"
+            :title="t('scene.duplicate')"
+            @click.stop="duplicateSystem(s.id)"
+          >⧉</button>
+          <button
+            v-if="editor.systems.length > 1"
+            class="rm"
+            :title="t('action.delete')"
+            @click.stop="removeSystem(s.id)"
+          >×</button>
+        </li>
+      </ul>
+    </section>
 
     <section
       v-for="sec in sections"

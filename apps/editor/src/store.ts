@@ -23,9 +23,42 @@ import { t } from './i18n.ts'
 export type Selection = { kind: 'child', index: number } | { kind: 'cp', index: number } | { kind: 'system' } | { kind: ModuleKind, index: number }
 
 let runtime: ParticleRuntime | null = null
-let handle: SystemHandle | null = null
 let syncTimer: ReturnType<typeof setTimeout> | null = null
-let currentTexture: GPUTexture | null = null
+
+/**
+ * 场景条目的 GPU 侧元数据（非响应式；def 本体在 editor.systems 里）。
+ * handle = runtime 系统句柄；texture/texturePath = 根系统贴图与登记键；
+ * childTextures = children 贴图（key = ChildDef.name）。
+ */
+interface SceneMeta {
+    handle:        SystemHandle | null
+    texture:       GPUTexture | TextureAsset | null
+    textureKind:   TextureChoice | 'tex-sprite'
+    texturePath:   string | null
+    childTextures: Record<string, TextureAsset>
+}
+const sceneMeta = new Map<number, SceneMeta>()
+
+function metaFor(id: number): SceneMeta {
+    let m = sceneMeta.get(id)
+    if (!m) {
+        m = { handle: null, texture: null, textureKind: 'halo', texturePath: null, childTextures: {} }
+        sceneMeta.set(id, m)
+    }
+
+    return m
+}
+
+/** 释放无人引用的 GPU 贴图（复制系统会共享 texture 对象，不能贸然销毁）。 */
+function releaseTexture(tex: GPUTexture | TextureAsset | null): void {
+    if (!tex) return
+    const gpu = 'texture' in tex ? tex.texture : tex
+    for (const m of sceneMeta.values()) {
+        if (!m.texture) continue
+        if (('texture' in m.texture ? m.texture.texture : m.texture) === gpu) return
+    }
+    gpu?.destroy()
+}
 
 /**
  * 贴图源字节登记表（导出独立 HTML 时内嵌用；GPU 贴图无法回读源数据）。
@@ -39,30 +72,26 @@ export interface TextureSourceInfo {
     alphaPriority?: boolean
 }
 const textureAssets = new Map<string, TextureSourceInfo>()
-let rootTexturePath: string | null = null
 
 /** 登记一份贴图源字节（loadWeTexture/setTexture/children 收集共用）。 */
 export function registerTextureAsset(info: TextureSourceInfo): void {
     textureAssets.set(info.path, info)
 }
 
-/** 全部已登记贴图（含根系统与各层 children）。 */
+/** 全部已登记贴图（含各系统的根贴图与各层 children）。 */
 export function getTextureAssets(): TextureSourceInfo[] {
     return [...textureAssets.values()]
 }
 
-/** 根系统当前贴图的登记键（null = halo/white/未加载）。 */
+/** 活跃系统当前贴图的登记键（null = halo/white/未加载）。 */
 export function getRootTexturePath(): string | null {
-    return rootTexturePath
+    return metaFor(editor.activeId).texturePath
 }
 
-/** 供测试/工具流程设置根贴图登记键。 */
+/** 供测试/工具流程设置活跃系统贴图登记键。 */
 export function setRootTexturePath(path: string | null): void {
-    rootTexturePath = path
+    metaFor(editor.activeId).texturePath = path
 }
-
-/** 当前 children 的贴图（key = ChildDef.name，runtime 接线用）。 */
-let currentChildTextures: Record<string, TextureAsset> = {}
 
 /** 解码一份 /we/tex 贴图（同路径 .tex.json 描述覆盖通道语义），源字节进导出登记表。 */
 async function loadWeTextureAsset(texPath: string): Promise<TextureAsset | null> {
@@ -142,8 +171,19 @@ export const WE_PRESET_DEFS = [
     { file: 'dna', labelKey: 'we.dna' },
 ]
 
+let nextSystemId = 1
+
+export interface SceneSystem {
+    id:   number
+    name: string
+    def:  ParticleSystemDef
+}
+
 export const editor = reactive({
-    def:          normalizeDef(fountainPreset()),
+    /** 活跃系统的 def（与 systems 中活跃项的 def 是同一 reactive 对象）。 */
+    def:          null as unknown as ParticleSystemDef,
+    activeId:     0,
+    systems:      [] as SceneSystem[],
     selected:     { kind: 'system' } as Selection,
     stats:        { fps: 0, alive: 0, drawn: 0, time: 0 },
     warnings:     [] as string[],
@@ -159,15 +199,122 @@ export const editor = reactive({
     pointer: [0, 0] as [number, number],
 })
 
+// ---------------------------------------------------------------- 场景（多系统）
+
+/** 场景条目入列；runtime 就绪时立即建系统（新建/复制/初始各一）。 */
+function createSceneEntry(def: ParticleSystemDef, from?: { id: number }): number {
+    const id = nextSystemId++
+    const normalized = normalizeDef(def)
+    editor.systems.push({ id, name: normalized.name, def: normalized })
+    const meta = metaFor(id)
+    if (from) {
+        const src = metaFor(from.id)
+        // 复制：贴图 GPU 对象与登记键共享引用
+        meta.texture = src.texture
+        meta.textureKind = src.textureKind
+        meta.texturePath = src.texturePath
+        meta.childTextures = { ...src.childTextures }
+    }
+    if (runtime) {
+        meta.handle = runtime.addSystem(normalized, {
+            ...meta.texture ? { texture: meta.texture } : {},
+            ...Object.keys(meta.childTextures).length ? { childTextures: meta.childTextures } : {},
+        })
+    }
+
+    return id
+}
+
+/** 选中切换：editor.def 指向目标系统的 def（同一 reactive 代理，面板/热编辑无缝衔接）。 */
+export function selectSystem(id: number): void {
+    const entry = editor.systems.find(s => s.id === id)
+    if (!entry) return
+    editor.activeId = id
+    editor.def = editor.systems.find(s => s.id === id)!.def
+    editor.selected = { kind: 'system' }
+    editor.textureName = metaFor(id).textureKind
+}
+
+/** 新建空系统并选中。 */
+export function addSystemToScene(): void {
+    const def = emptyPreset()
+    def.name = `system-${editor.systems.length + 1}`
+    selectSystem(createSceneEntry(def))
+}
+
+/** 复制系统（def 深拷贝；贴图/children 贴图共享）并选中副本。 */
+export function duplicateSystem(id: number): void {
+    const src = editor.systems.find(s => s.id === id)
+    if (!src) return
+    const def = JSON.parse(JSON.stringify(src.def)) as ParticleSystemDef
+    def.name = `${src.def.name}-copy`
+    selectSystem(createSceneEntry(def, { id }))
+}
+
+/** 移除系统（至少保留 1 个）；销毁其 handle 与 GPU 贴图。 */
+export function removeSystem(id: number): void {
+    if (editor.systems.length <= 1) return
+    const idx = editor.systems.findIndex(s => s.id === id)
+    if (idx < 0) return
+    const meta = metaFor(id)
+    meta.handle?.destroy()
+    releaseTexture(meta.texture)
+    sceneMeta.delete(id)
+    editor.systems.splice(idx, 1)
+    if (editor.activeId === id) selectSystem(editor.systems[Math.max(0, idx - 1)]!.id)
+}
+
+/** 场景快照（导出 HTML/自动化用；def 为响应式代理，调用方自行深拷贝）。 */
+export interface SceneSystemInfo {
+    id:          number
+    name:        string
+    def:         ParticleSystemDef
+    texturePath: string | null
+}
+
+export function getSceneSystems(): SceneSystemInfo[] {
+    return editor.systems.map(s => ({ id: s.id, name: s.name, def: s.def, texturePath: metaFor(s.id).texturePath }))
+}
+
+// ---------------------------------------------------------------- 初始场景
+
+{
+    const first = normalizeDef(fountainPreset())
+    editor.systems.push({ id: nextSystemId, name: first.name, def: first })
+    editor.activeId = nextSystemId
+    editor.def = editor.systems[0]!.def
+    nextSystemId++
+}
+
 // ---------------------------------------------------------------- 自动保存（localStorage）
 
-const DEF_STORAGE_KEY = 'teilchen.def.v1'
+const SCENE_STORAGE_KEY = 'teilchen.scene.v2'
+const LEGACY_DEF_KEY = 'teilchen.def.v1'
 
-// 启动恢复上次编辑现场（含 children 子定义与 spin 等扩展字段；
-// 贴图为 GPU 资源不持久化，attach 后按材质引用尽力恢复）
+// 启动恢复上次编辑现场（整场景多系统；贴图为 GPU 资源不持久化，attach 后按材质引用尽力恢复）
 try {
-    const saved = localStorage.getItem(DEF_STORAGE_KEY)
-    if (saved) editor.def = normalizeDef(JSON.parse(saved) as ParticleSystemDef)
+    const saved = localStorage.getItem(SCENE_STORAGE_KEY)
+    if (saved) {
+        const scene = JSON.parse(saved) as { systems?: { name: string, def: ParticleSystemDef }[] }
+        if (Array.isArray(scene.systems) && scene.systems.length) {
+            editor.systems.length = 0
+            for (const s of scene.systems) {
+                const def = normalizeDef(s.def)
+                editor.systems.push({ id: nextSystemId++, name: s.name || def.name, def })
+            }
+            editor.activeId = editor.systems[0]!.id
+            editor.def = editor.systems[0]!.def
+        }
+    }
+    else {
+        const legacy = localStorage.getItem(LEGACY_DEF_KEY)
+        if (legacy) {
+            const def = normalizeDef(JSON.parse(legacy) as ParticleSystemDef)
+            editor.systems[0]!.def = def
+            editor.def = editor.systems[0]!.def
+            editor.systems[0]!.name = def.name
+        }
+    }
 }
 catch { /* 存档损坏则忽略，使用默认预设 */ }
 
@@ -176,7 +323,7 @@ watch(() => editor.def, () => {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
         try {
-            localStorage.setItem(DEF_STORAGE_KEY, JSON.stringify(editor.def))
+            localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify({ systems: editor.systems.map(s => ({ name: s.name, def: s.def })) }))
         }
         catch { /* 容量超限等异常忽略 */ }
     }, 400)
@@ -188,16 +335,26 @@ export async function attachRuntime(canvas: HTMLCanvasElement): Promise<void> {
     if (runtime) return
     runtime = await ParticleRuntime.create({ canvas, onWarning: pushWarning })
 
-    // 恢复现场：children 材质贴图尽力加载（dev 的 /we 资产可用时），再建系统
-    currentChildTextures = await attachChildTextures(editor.def)
-    handle = runtime.addSystem(editor.def, Object.keys(currentChildTextures).length ? { childTextures: currentChildTextures } : {})
+    // 恢复现场：逐系统收集 children 贴图并建系统；根贴图按材质引用尽力加载
+    for (const entry of editor.systems) {
+        const meta = metaFor(entry.id)
+        meta.childTextures = await attachChildTextures(entry.def)
+        meta.handle = runtime.addSystem(entry.def, Object.keys(meta.childTextures).length ? { childTextures: meta.childTextures } : {})
+        const texPath = entry.def.material.textures[0]
+        if (texPath) {
+            const asset = await loadWeTextureAsset(texPath)
+            if (asset) {
+                meta.texture = asset
+                meta.textureKind = asset.frames?.length ? 'tex-sprite' : 'tex'
+                meta.texturePath = texPath
+                meta.handle.update(entry.def, { texture: asset })
+            }
+        }
+    }
     runtime.start()
     editor.runtimeReady = true
     setInterval(pollStats, 250)
-
-    // 根材质引用的 sprite 贴图尽力加载
-    const texPath = editor.def.material.textures[0]
-    if (texPath) void loadWeTexture(texPath)
+    editor.textureName = metaFor(editor.activeId).textureKind
 }
 
 export function getRuntime(): ParticleRuntime | null {
@@ -211,6 +368,10 @@ if (typeof window !== 'undefined') {
         get editor() { return editor },
         importWeJson,
         serializeWe: () => serializeWeParticleJson(editor.def),
+        addSystemToScene,
+        duplicateSystem,
+        removeSystem,
+        selectSystem,
     }
 }
 
@@ -236,21 +397,27 @@ watch(() => editor.def, () => scheduleSync(), { deep: true })
 function scheduleSync(): void {
     if (syncTimer) clearTimeout(syncTimer)
     syncTimer = setTimeout(() => {
-        if (!handle) return
-        const ws = handle.update(editor.def)
+        const meta = metaFor(editor.activeId)
+        if (!meta.handle) return
+        const ws = meta.handle.update(editor.def)
         for (const w of ws) pushWarning(`[${editor.def.name}] ${w}`)
     }, 120)
 }
 
-/** 整体替换 def（预设/导入），reset 重跑；children 结构重建时套用当前 children 贴图。 */
+/** 整体替换活跃系统的 def（预设/导入），reset 重跑；children 结构重建时套用其 children 贴图。 */
 export function loadDef(def: ParticleSystemDef): void {
     const normalized = normalizeDef(def)
     editor.selected = { kind: 'system' }
-    editor.def = normalized
-    if (handle) {
-        handle.update(normalized, {
+    const entry = editor.systems.find(s => s.id === editor.activeId)
+    if (!entry) return
+    entry.def = normalized
+    entry.name = normalized.name
+    editor.def = entry.def
+    const meta = metaFor(entry.id)
+    if (meta.handle) {
+        meta.handle.update(normalized, {
             reset: true,
-            ...Object.keys(currentChildTextures).length ? { childTextures: currentChildTextures } : {},
+            ...Object.keys(meta.childTextures).length ? { childTextures: meta.childTextures } : {},
         })
     }
 }
@@ -344,8 +511,8 @@ export async function openChildAsSystem(index: number): Promise<void> {
     const def = normalizeDef(JSON.parse(JSON.stringify(child.def)) as ParticleSystemDef)
     def.name = child.name.split('/').pop()!.replace(/\.json$/, '') || 'child'
 
-    // 贴图是 runtime 侧状态（不在 def 里）：按新 def 树收集根/children 贴图
-    currentChildTextures = await attachChildTextures(def)
+    // 贴图是 runtime 侧状态（不在 def 里）：按新 def 树收集 children 贴图与根贴图
+    metaFor(editor.activeId).childTextures = await attachChildTextures(def)
     loadDef(def)
     const texPath = def.material.textures[0]
     if (texPath) await loadWeTexture(texPath)
@@ -390,7 +557,7 @@ export async function importWeJson(text: string, materialText?: string): Promise
             return undefined
         }
     })
-    currentChildTextures = await attachChildTextures(def)
+    metaFor(editor.activeId).childTextures = await attachChildTextures(def)
     loadDef(def)
 
     // 材质引用的 sprite 贴图自动加载（/we/tex/<path>.tex）
@@ -398,17 +565,19 @@ export async function importWeJson(text: string, materialText?: string): Promise
     if (texPath) await loadWeTexture(texPath)
 }
 
-/** 从本地 WE 资产加载 .tex 贴图并应用到当前系统（导入预设后自动套用）。 */
+/** 从本地 WE 资产加载 .tex 贴图并应用到活跃系统（导入预设后自动套用）。 */
 export async function loadWeTexture(texPath: string): Promise<boolean> {
-    if (!runtime || !handle) return false
+    if (!runtime) return false
+    const meta = metaFor(editor.activeId)
+    if (!meta.handle) return false
     const asset = await loadWeTextureAsset(texPath)
     if (!asset) return false
-    const old = currentTexture
-    handle.update(editor.def, { texture: asset })
-    currentTexture = asset.texture
-    editor.textureName = asset.frames?.length ? 'tex-sprite' : 'tex'
-    rootTexturePath = texPath
-    old?.destroy()
+    meta.handle.update(editor.def, { texture: asset })
+    releaseTexture(meta.texture)
+    meta.texture = asset
+    meta.textureKind = asset.frames?.length ? 'tex-sprite' : 'tex'
+    meta.texturePath = texPath
+    editor.textureName = meta.textureKind
 
     return true
 }
@@ -429,7 +598,9 @@ export function exportWeJson(): void {
 export type TextureChoice = 'halo' | 'tex' | 'upload' | 'white'
 
 export async function setTexture(name: TextureChoice, file?: File, descriptorFile?: File): Promise<void> {
-    if (!runtime || !handle) return
+    if (!runtime) return
+    const meta = metaFor(editor.activeId)
+    if (!meta.handle) return
     let tex: GPUTexture | TextureAsset
     if (name === 'halo') {
         tex = createHaloTexture(runtime.device)
@@ -455,7 +626,7 @@ export async function setTexture(name: TextureChoice, file?: File, descriptorFil
             const data = await file.arrayBuffer()
             tex = await createTextureFromTex(runtime.device, data, file.name, alphaPriority)
             registerTextureAsset({ path: file.name, data, alphaPriority })
-            rootTexturePath = file.name
+            meta.texturePath = file.name
         }
         catch(err) {
             pushWarning(t('warn.texFailed', { msg: (err as Error).message }))
@@ -467,12 +638,12 @@ export async function setTexture(name: TextureChoice, file?: File, descriptorFil
         if (!file) return
         tex = await createTextureFromUrl(runtime.device, URL.createObjectURL(file))
         registerTextureAsset({ path: file.name, data: await file.arrayBuffer() })
-        rootTexturePath = file.name
+        meta.texturePath = file.name
     }
-    const old = currentTexture
-    handle.update(editor.def, { texture: tex })
-    currentTexture = 'texture' in tex ? tex.texture : tex
-    editor.textureName = name === 'tex' && 'texture' in tex && tex.frames?.length ? 'tex-sprite' : name
-    if (name === 'halo' || name === 'white') rootTexturePath = null
-    old?.destroy()
+    meta.handle.update(editor.def, { texture: tex })
+    releaseTexture(meta.texture)
+    meta.texture = tex
+    meta.textureKind = name === 'tex' && 'frames' in tex && (tex as TextureAsset).frames?.length ? 'tex-sprite' : name
+    if (name === 'halo' || name === 'white') meta.texturePath = null
+    editor.textureName = meta.textureKind
 }

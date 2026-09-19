@@ -33,6 +33,9 @@ const messages: Record<Locale, Record<string, string>> = {
     zh: {
 
         // 工具栏
+        'sec.scene':                   '场景',
+        'scene.add':                   '新建系统',
+        'scene.duplicate':             '复制系统',
         'toolbar.presets':             '预设…',
         'toolbar.groupProgram':        '程序预设',
         'toolbar.groupWe':             'WE 预设',
@@ -145,6 +148,9 @@ const messages: Record<Locale, Record<string, string>> = {
     en: {
 
         // toolbar
+        'sec.scene':                   'Scene',
+        'scene.add':                   'New system',
+        'scene.duplicate':             'Duplicate system',
         'toolbar.presets':             'Presets…',
         'toolbar.groupProgram':        'Built-in presets',
         'toolbar.groupWe':             'WE presets',

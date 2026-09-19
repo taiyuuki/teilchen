@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { editor, registerTextureAsset, setRootTexturePath } from '../src/store.ts'
+import {
+    addSystemToScene,
+    editor,
+    registerTextureAsset,
+    removeSystem,
+    setRootTexturePath,
+} from '../src/store.ts'
 import { buildStandaloneHtml } from '../src/exportHtml.ts'
 
 describe('buildStandaloneHtml（独立 HTML 导出模板）', () => {
@@ -52,5 +58,17 @@ describe('buildStandaloneHtml（独立 HTML 导出模板）', () => {
         finally {
             setRootTexturePath(null)
         }
+    })
+
+    it('多系统场景：全部系统进场景文件', () => {
+        editor.def.name = 'multi-a'
+        addSystemToScene()
+        editor.def.name = 'multi-b'
+        const html = buildStandaloneHtml()
+        removeSystem(editor.activeId)
+        editor.def.name = 'untitled'
+
+        expect(html).toContain('"name":"multi-a"')
+        expect(html).toContain('"name":"multi-b"')
     })
 })

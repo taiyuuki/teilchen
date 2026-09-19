@@ -149,3 +149,13 @@ input:not([type='range']):not([type='checkbox']):hover { border-color: #8ab4ff; 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: #1c2643; border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* 场景列表（多系统） */
+.tree section.scene h3 { display: flex; align-items: center; }
+.tree .scene-add {
+  margin-left: auto;
+  padding: 0 7px; font-size: 12px; line-height: 18px;
+  color: #8ab4ff;
+}
+.tree li .sys-meta { color: #55628c; font-size: 11px; }
+.tree li .rm + .rm { margin-left: 2px; }
