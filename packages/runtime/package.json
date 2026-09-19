@@ -1,34 +1,37 @@
 {
-  "name": "@teilchen/runtime",
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "build": "pnpm run clean && rolldown -c",
-    "clean": "rimraf dist"
-  },
-  "sideEffects": false,
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "publishConfig": {
-    "access": "public",
+    "name": "@teilchen/runtime",
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "build": "pnpm run clean && rolldown -c",
+        "clean": "rimraf dist"
+    },
+    "sideEffects": false,
+    "types": "./dist/index.d.ts",
     "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
+        ".": "./src/index.ts",
+        "./player": "./dist/player.global.js",
+        "./dist/*": "./dist/*"
+    },
+    "publishConfig": {
+        "access": "public",
+        "exports": {
+            ".": {
+                "types": "./dist/index.d.ts",
+                "default": "./dist/index.js"
+            },
+            "./player": "./dist/player.global.js"
+        }
+    },
+    "author": "taiyuuki <taiyuuki@qq.com>",
+    "license": "MIT",
+    "files": [
+        "dist"
+    ],
+    "dependencies": {
+        "@teilchen/core": "workspace:*"
+    },
+    "devDependencies": {
+        "@webgpu/types": "catalog:"
     }
-  },
-  "author": "taiyuuki <taiyuuki@qq.com>",
-  "license": "MIT",
-  "files": [
-    "dist"
-  ],
-  "dependencies": {
-    "@teilchen/core": "workspace:*"
-  },
-  "devDependencies": {
-    "@webgpu/types": "catalog:"
-  }
 }

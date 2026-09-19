@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { PRESET_DEFS, type TextureChoice, WE_PRESET_DEFS, editor, exportWeJson, importWeJson, loadDef, loadWePreset, setTexture } from '../store.ts'
+import { exportStandaloneHtml } from '../exportHtml.ts'
 import { i18n, setLocale, t } from '../i18n.ts'
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -96,6 +97,9 @@ async function onTexFile(e: Event): Promise<void> {
     >
     <button @click="exportWeJson()">
       {{ t('toolbar.export') }}
+    </button>
+    <button @click="exportStandaloneHtml()">
+      {{ t('toolbar.exportHtml') }}
     </button>
     <select @change="onTextureSelect">
       <option

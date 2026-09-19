@@ -1,11 +1,11 @@
 # teilchen
 
-基于 **WebGPU** 的 GPU VFX Runtime，兼容Wallpaper Engine的json文件。
+基于 **WebGPU** 的 GPU VFX Runtime 与编辑器。`@teilchen/core` + `@teilchen/runtime` 作为独立库可嵌入任意场景；同时兼容 Wallpaper Engine 的 json 文件（导入能力之一）。
 
 ```
 packages/
   core/      数据模型 + 模块参数注册表 + WE JSON 导入/导出（与图形 API 无关）
-  runtime/   WebGPU 运行时：GPU 模拟 + indirect billboard 渲染
+  runtime/   WebGPU 运行时：GPU 模拟 + indirect billboard 渲染 + VFXPlayer 高层入口
 apps/
   playground/  浏览器预览台（pnpm dev）
   editor/      Vue 3 可视化编辑器（pnpm dev:editor）
@@ -17,9 +17,30 @@ apps/
 pnpm install
 pnpm dev            # playground  http://localhost:5180（需要 WebGPU：Chrome 113+ / Safari 26+）
 pnpm dev:editor     # editor      http://localhost:5181
+pnpm build          # 构建两个包（含 player.global.js 浏览器直引包）
 pnpm lint
 pnpm typecheck
+pnpm test
 ```
+
+## 作为库使用
+
+高层入口是 `VFXPlayer`（`@teilchen/runtime`）：把"解析 → 子定义递归 → 贴图解码 → 建系统"收进一个 API。
+
+```ts
+import { VFXPlayer, fetchSource } from '@teilchen/runtime'
+
+const player = await VFXPlayer.create({ canvas })
+await player.load(scene, { assets: fetchSource('/assets') })  // 场景文件 / 原生 def / WE JSON
+player.start()
+```
+
+- `load` 接受三种输入（对象或 JSON 字符串）：**场景文件**（`{ format: 'teilchen/scene', version: 1, systems: [...] }`，可多系统、带 clearColor）、**原生 ParticleSystemDef**、**WE particle JSON**（自动识别，材质/子定义/贴图按路径从资产源拉取）。
+- 资产源 `AssetSource` 是可插拔的：`fetchSource(baseUrl)`（HTTP 目录）、`bufferSource(files)`（内嵌字节/base64，带 basename 兜底）、`chainSource(...)`（多源串联）。贴图支持 WE `.tex`（按 TEXV 魔数嗅探，含 `.tex.json` 通道语义描述）与常规图片。
+- 播放控制：`start/stop/setPaused/step/reset/setPointer/setSpeed/setCamera/setClearColor`，`stats`/`time`/`systems` 只读。
+- 浏览器直引：`@teilchen/runtime/player`（`dist/player.global.js`，IIFE 单文件，core 已打进包）。页面预置 `window.__TEILCHEN_SCENE__` + `window.__TEILCHEN_ASSETS__`（路径 → base64）时自动引导播放——这正是编辑器「导出 HTML」的产物结构。
+
+> 注意：`@teilchen/core` 的 package.json 声明 `sideEffects: true`——builtins.ts 顶层会向模块注册表登记全部内置模块，树摇若把该副作用摇掉，打包产物会静默编译出空程序表（IIFE 打包曾踩坑）。
 
 ## Editor
 
@@ -31,6 +52,7 @@ pnpm typecheck
 - 中央预览 + 2D gizmo overlay（emitter 范围线框、controlpoint 十字、指针圈）
 - 时间轴：播放/暂停/单步/重置、fps/alive/drawn/时间
 - 预设（与 playground 共享 `core/presets.ts`）、WE JSON 导入/导出、贴图切换（halo/white/上传图片）
+- **导出独立 HTML**：单文件内嵌 player IIFE 包 + 场景 JSON + base64 贴图，任何支持 WebGPU 的浏览器直接打开即播（文件协议亦可）
 
 ## GPU 模拟架构
 

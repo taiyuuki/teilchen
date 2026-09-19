@@ -142,12 +142,12 @@ interface SystemRes {
 }
 
 export class ParticleRuntime {
-    readonly device:             GPUDevice
-    readonly canvas:             HTMLCanvasElement
-    private readonly ctx:        GPUCanvasContext
-    private readonly format:     GPUTextureFormat
-    private readonly clearColor: GPUColor
-    private readonly onWarning:  (msg: string) => void
+    readonly device:            GPUDevice
+    readonly canvas:            HTMLCanvasElement
+    private readonly ctx:       GPUCanvasContext
+    private readonly format:    GPUTextureFormat
+    private clearColor:         GPUColor
+    private readonly onWarning: (msg: string) => void
 
     private readonly frameUniform:  GPUBuffer
     private readonly computeModule: GPUShaderModule
@@ -855,6 +855,11 @@ export class ParticleRuntime {
     /** 播放速度倍率（发射率/运动/时间统一缩放；对应 WE instanceoverride.speed）。 */
     setSpeed(multiplier: number): void {
         this.speedMul = Math.max(0, multiplier)
+    }
+
+    /** 背景色（渲染 pass 的 clear 值）。 */
+    setClearColor(color: { r: number; g: number; b: number; a: number }): void {
+        this.clearColor = color
     }
 
     /** 控制点角度动画驱动器（每帧以 simTime 求值写入 cpAngles；null 清除）。 */

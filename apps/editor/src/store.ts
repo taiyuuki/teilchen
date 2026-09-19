@@ -27,6 +27,27 @@ let handle: SystemHandle | null = null
 let syncTimer: ReturnType<typeof setTimeout> | null = null
 let currentTexture: GPUTexture | null = null
 
+/**
+ * 当前贴图的源字节（导出独立 HTML 时内嵌用；GPU 贴图无法回读源数据）。
+ * halo/white 程序化贴图为 null（导出产物由 player 自动生成同款）。
+ */
+export interface TextureSourceInfo {
+    path: string
+    data: ArrayBuffer
+
+    /** 仅 .tex：rg88/r8 的通道语义描述（false 时导出产物附带 .json 描述）。 */
+    alphaPriority?: boolean
+}
+let textureSource: TextureSourceInfo | null = null
+
+export function getTextureSource(): TextureSourceInfo | null {
+    return textureSource
+}
+
+function setTextureSource(src: TextureSourceInfo | null): void {
+    textureSource = src
+}
+
 function emptyPreset(): ParticleSystemDef {
     const def = normalizeDef(fountainPreset())
     def.name = 'untitled'
@@ -309,12 +330,14 @@ export async function loadWeTexture(texPath: string): Promise<boolean> {
     try {
         const res = await fetch(`/we/tex/${texPath}.tex`)
         if (!res.ok) return false
-        const tex = await createTextureFromTex(runtime.device, await res.arrayBuffer(), texPath)
+        const data = await res.arrayBuffer()
+        const tex = await createTextureFromTex(runtime.device, data, texPath)
         const old = currentTexture
         handle.update(editor.def, { texture: tex })
         currentTexture = 'texture' in tex ? tex.texture : tex
         editor.textureName = 'texture' in tex && tex.frames?.length ? 'tex-sprite' : 'tex'
         old?.destroy()
+        setTextureSource({ path: texPath, data })
 
         return true
     }
@@ -364,7 +387,9 @@ export async function setTexture(name: TextureChoice, file?: File, descriptorFil
             }
         }
         try {
-            tex = await createTextureFromTex(runtime.device, await file.arrayBuffer(), file.name, alphaPriority)
+            const data = await file.arrayBuffer()
+            tex = await createTextureFromTex(runtime.device, data, file.name, alphaPriority)
+            setTextureSource({ path: file.name, data, alphaPriority })
         }
         catch(err) {
             pushWarning(t('warn.texFailed', { msg: (err as Error).message }))
@@ -375,10 +400,12 @@ export async function setTexture(name: TextureChoice, file?: File, descriptorFil
     else {
         if (!file) return
         tex = await createTextureFromUrl(runtime.device, URL.createObjectURL(file))
+        setTextureSource({ path: file.name, data: await file.arrayBuffer() })
     }
     const old = currentTexture
     handle.update(editor.def, { texture: tex })
     currentTexture = 'texture' in tex ? tex.texture : tex
     editor.textureName = name === 'tex' && 'texture' in tex && tex.frames?.length ? 'tex-sprite' : name
+    if (name === 'halo' || name === 'white') setTextureSource(null)
     old?.destroy()
 }

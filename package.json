@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "pnpm --filter playground dev",
     "dev:editor": "pnpm --filter editor dev",
+    "build": "pnpm --filter @teilchen/core build && pnpm --filter @teilchen/runtime build",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc -b tsconfig.json && pnpm --filter editor typecheck"

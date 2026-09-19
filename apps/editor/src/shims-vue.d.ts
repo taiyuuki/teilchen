@@ -4,3 +4,8 @@ declare module '*.vue' {
     const component: DefineComponent<Record<string, never>, Record<string, never>, unknown>
     export default component
 }
+
+declare module '*?raw' {
+    const content: string
+    export default content
+}

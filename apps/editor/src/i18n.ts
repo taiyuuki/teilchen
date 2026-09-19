@@ -38,6 +38,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'toolbar.groupWe':             'WE 预设',
         'toolbar.import':              '导入 WE JSON',
         'toolbar.export':              '导出',
+        'toolbar.exportHtml':          '导出 HTML',
         'toolbar.texHalo':             '贴图：halo',
         'toolbar.texWhite':            '贴图：white',
         'toolbar.texUpload':           '贴图：上传图片…',
@@ -135,6 +136,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'warn.wePresetFailed':         'WE 预设 {file} 加载失败: {msg}',
         'warn.texDescFailed':          '.tex.json 描述解析失败: {msg}，按默认通道语义',
         'warn.texFailed':              '.tex 解析失败: {msg}',
+        'warn.exportHtmlDone':         '已导出独立 HTML: {file}',
         'warn.texLoadFailed':          '贴图 {tex} 加载失败: {msg}',
 
         // 通用
@@ -148,6 +150,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'toolbar.groupWe':             'WE presets',
         'toolbar.import':              'Import WE JSON',
         'toolbar.export':              'Export',
+        'toolbar.exportHtml':          'Export HTML',
         'toolbar.texHalo':             'Texture: halo',
         'toolbar.texWhite':            'Texture: white',
         'toolbar.texUpload':           'Texture: upload image…',
@@ -245,6 +248,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'warn.wePresetFailed':         'Failed to load WE preset {file}: {msg}',
         'warn.texDescFailed':          'Failed to parse .tex.json descriptor: {msg}; falling back to default channel semantics',
         'warn.texFailed':              'Failed to parse .tex: {msg}',
+        'warn.exportHtmlDone':         'Standalone HTML exported: {file}',
         'warn.texLoadFailed':          'Failed to load texture {tex}: {msg}',
 
         // common
