@@ -25,7 +25,7 @@ pnpm test
 
 ## 作为库使用
 
-高层入口是 `VFXPlayer`（`@teilchen/runtime`）：把"解析 → 子定义递归 → 贴图解码 → 建系统"收进一个 API。
+高层入口是 `VFXPlayer`（`@teilchen/runtime`）
 
 ```bash
 npm i @teilchen/core @teilchen/runtime
@@ -46,9 +46,7 @@ player.start()
 - `load` 接受三种输入（对象或 JSON 字符串）：**场景文件**（`{ format: 'teilchen/scene', version: 1, systems: [...] }`，可多系统、带 clearColor）、**原生 ParticleSystemDef**、**WE particle JSON**（自动识别，材质/子定义/贴图按路径从资产源拉取）。
 - 资产源 `AssetSource` 是可插拔的：`fetchSource(baseUrl)`（HTTP 目录）、`bufferSource(files)`（内嵌字节/base64，带 basename 兜底）、`chainSource(...)`（多源串联）。贴图支持 WE `.tex`（按 TEXV 魔数嗅探，含 `.tex.json` 通道语义描述）与常规图片。
 - 播放控制：`start/stop/setPaused/step/reset/setPointer/setSpeed/setCamera/setClearColor`，`stats`/`time`/`systems` 只读；宿主回调 `onStats`（统计）与 `onWarning`（告警）。
-- 浏览器直引：`@teilchen/runtime/player`（`dist/player.global.js`，IIFE 单文件，core 已打进包）。页面预置 `window.__TEILCHEN_SCENE__` + `window.__TEILCHEN_ASSETS__`（路径 → base64）时自动引导播放——这正是编辑器「导出 HTML」的产物结构。
-
-> 注意：`@teilchen/core` 的 package.json 声明 `sideEffects: true`——builtins.ts 顶层会向模块注册表登记全部内置模块，树摇若把该副作用摇掉，打包产物会静默编译出空程序表（IIFE 打包曾踩坑）。
+- 浏览器直引：`@teilchen/runtime/player`（`dist/player.global.js`，IIFE 单文件）。页面预置 `window.__TEILCHEN_SCENE__` + `window.__TEILCHEN_ASSETS__`（路径 → base64）时自动引导播放。
 
 ## Editor
 
@@ -90,19 +88,7 @@ player.start()
 - **renderer**：sprite / spritetrail / ropetrail / rope 全支持（length/maxlength/segments）
 - vec3 字段的 `"x y z"` 字符串 / 数组 / 标量三种写法均已兼容
 
-实测（M-series，Chrome）：WE 官方 exampleturbolence.json（rate 15000、maxcount 25000）稳定 **100fps vsync、alive ≈ 24.9k**。
+## Todo
 
-## Roadmap
-
-- [x] Phase 3：Editor MVP（Vue 3）—— 注册表驱动的属性面板、controlpoint gizmo、时间轴、热编辑 ✓
-- [ ] Editor 打磨：模块拖拽排序、撤销/重做、参数曲线、多系统场景面板
-- [x] children 子粒子系统 ✓ —— static（独立子系统）/ eventdeath / eventspawn（事件缓冲 + 爆发实例池，
-      GPU CAS 分配、按寿命过期）/ eventfollow（实例槽位与父粒子 1:1 直映，逐帧跟随）；
-      子实例驱动子发射器（instantaneous 出生爆发 / rate 按实例 age 结转），
-      子系统 controlpoint[cpStart] 替换为所属实例位置（vortex/attract 类算子可用）
-- [x] rope/ropetrail/spritetrail 渲染器 ✓ —— spritetrail（速度拉伸拖影，无额外缓冲）、
-      ropetrail（时间分桶历史环形缓冲 + 相邻点连段，出生预填平滑长出）、
-      rope（renderIndices bitonic 排序按 spawnSequence 连段，逐 pass 提交驱动排序网络）
-- [x] 31 种 colorBlendMode ✓ —— shader 内采样离屏场景纹理做 Photoshop 式合成（WE `_rt_FullFrameBuffer` 语义）；
-      pass A 正常系统 → 离屏，pass B blit + 混合系统（Multiply/Screen/Overlay/HSL 全家）
-- [ ] 音频响应（FFT → uniform）、场景多层合成、pkg 容器读取、导出独立 HTML
+- [ ] 音频响应（FFT → uniform）
+- [ ] Editor：模块拖拽排序、撤销/重做、参数曲线
