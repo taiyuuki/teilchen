@@ -313,11 +313,11 @@ export function ropePreset(): ParticleSystemDef {
 
 export function ribbonPreset(): ParticleSystemDef {
 
-    // ropetrail：每粒子拖着一条历史轨迹带
+    // ropetrail：每粒子拖着一条历史轨迹带（length = 拖尾总时长·秒）
     const def = defaultSystem('ribbon')
     def.material.blending = 'additive'
     def.maxCount = 800
-    def.renderers = [{ name: 'ropetrail', length: 0.02, maxlength: 2.4, segments: 16 }]
+    def.renderers = [{ name: 'ropetrail', length: 2.4, segments: 32 }]
     def.emitters = [
         {
             name:        'sphererandom',
