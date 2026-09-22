@@ -44,6 +44,11 @@ export const SYS_UNIFORM_SIZE = 16 + 16 + 8 * 16 + 8 * 16 + 16 // 304：origin/p
 // time/dt/res(vec4) + vp 矩阵(64) + eye.xyz/focal(16) + camRight.xyz/persp(16) + camUp.xyz(16)
 export const FRAME_UNIFORM_SIZE = 144
 
+// ---- Audio uniform（全局，binding 11） ----
+// level/bass/mid/treble/beat(5) + pad(3) + bands 8×vec4f（32 频带 0-1，对数分桶）
+export const AUDIO_BANDS = 32
+export const AUDIO_UNIFORM_SIZE = 32 + AUDIO_BANDS * 4 // 160
+
 // ---- draw indirect ----
 export const INDIRECT_SIZE = 16 // vertexCount, instanceCount, firstVertex, firstInstance
 
@@ -108,6 +113,7 @@ export const OperatorKind = {
     ControlPointAttract:     11,
     MaintainDistanceToCP:    12,
     Boids:                   13,
+    AudioReact:              14,
 } as const
 
 /** 子粒子系统类型（与 WGSL/ChildDesc 一致）。 */

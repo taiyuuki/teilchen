@@ -185,6 +185,7 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
             controlpointattract:            OperatorKind.ControlPointAttract,
             maintaindistancetocontrolpoint: OperatorKind.MaintainDistanceToCP,
             boids:                          OperatorKind.Boids,
+            audioreact:                     OperatorKind.AudioReact,
         }
         const kind = kindMap[raw.name]
         if (kind === undefined) {
@@ -301,6 +302,14 @@ export function compileProgram(def: ParticleSystemDef): CompiledProgram {
                 put4(f32, b, num(p.alignmentfactor), num(p.cohesionfactor), num(p.separationfactor), 0)
                 break
             }
+            case OperatorKind.AudioReact:
+
+                // a=(band 0-1, sizemin, sizemax, 0)  b=(alphamin, alphamax, 0, 0)
+                put4(f32, a, Math.min(1, Math.max(0, num(p.band, 0.1))), num(p.sizemin, 1), num(p.sizemax, 1.6), 0)
+                put4(f32, b, num(p.alphamin, 1), num(p.alphamax, 1), 0, 0)
+                break
+            default:
+                break
         }
 
         operatorCount++

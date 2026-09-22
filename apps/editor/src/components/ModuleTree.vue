@@ -50,7 +50,9 @@ function selectCp(index: number): void {
           class="scene-add"
           :title="t('scene.add')"
           @click="addSystemToScene()"
-        >＋</button>
+        >
+          ＋
+        </button>
       </h3>
       <ul>
         <li
@@ -68,13 +70,17 @@ function selectCp(index: number): void {
             class="rm"
             :title="t('scene.duplicate')"
             @click.stop="duplicateSystem(s.id)"
-          >⧉</button>
+          >
+            ⧉
+          </button>
           <button
             v-if="editor.systems.length > 1"
             class="rm"
             :title="t('action.delete')"
             @click.stop="removeSystem(s.id)"
-          >×</button>
+          >
+            ×
+          </button>
         </li>
       </ul>
     </section>

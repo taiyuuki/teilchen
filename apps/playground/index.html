@@ -23,6 +23,15 @@
       padding: 2px 8px; cursor: pointer; margin-right: 6px;
     }
     .overlay button.active { background: #2a3a66; border-color: #8ab4ff; }
+    .overlay .filebtn {
+      font: inherit; background: #141a2c; color: #c8d3f5;
+      border: 1px solid rgba(120, 140, 200, 0.35); border-radius: 4px;
+      padding: 2px 8px; cursor: pointer; margin-right: 6px; display: inline-block;
+    }
+    .overlay .filebtn.active { background: #2a3a66; border-color: #8ab4ff; }
+    .audio { margin-top: 6px; display: flex; align-items: center; }
+    .audio .track { color: #7f8db0; max-width: 150px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; }
     .stats { margin-top: 8px; color: #7f8db0; }
     .stats b { color: #b7e28a; font-weight: normal; }
     .warn { color: #e8b46a; margin-top: 6px; max-width: 340px; white-space: pre-wrap; }
@@ -43,6 +52,17 @@
       <button id="play">⏸</button>
       <button id="step">⏯</button>
       <button id="reset">↺</button>
+    </div>
+    <div class="audio">
+      <select id="audiosrc">
+        <option value="off" selected>音频：关</option>
+        <option value="test">音频：测试信号</option>
+        <option value="mic">音频：麦克风</option>
+      </select>
+      <label class="filebtn" id="filebtn">🎵 音频文件
+        <input id="audiofile" type="file" accept="audio/*" hidden>
+      </label>
+      <span class="track" id="audiotrack"></span>
     </div>
     <div class="stats" id="stats">fps <b>—</b> · particles <b>—</b></div>
     <div class="warn" id="warn"></div>

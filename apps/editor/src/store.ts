@@ -180,6 +180,7 @@ export interface SceneSystem {
 }
 
 export const editor = reactive({
+
     /** 活跃系统的 def（与 systems 中活跃项的 def 是同一 reactive 对象）。 */
     def:          null as unknown as ParticleSystemDef,
     activeId:     0,
@@ -209,6 +210,7 @@ function createSceneEntry(def: ParticleSystemDef, from?: { id: number }): number
     const meta = metaFor(id)
     if (from) {
         const src = metaFor(from.id)
+
         // 复制：贴图 GPU 对象与登记键共享引用
         meta.texture = src.texture
         meta.textureKind = src.textureKind

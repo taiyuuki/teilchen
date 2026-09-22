@@ -362,6 +362,50 @@ export function ribbonPreset(): ParticleSystemDef {
     return def
 }
 
+export function audioPreset(): ParticleSystemDef {
+
+    // audioreact：频谱能量驱动脉动（playground 选音频源或用「测试信号」演示）
+    // 低频（kick）→ 粒子胀缩；中频 → alpha 闪烁；涡旋维持环流
+    const def = defaultSystem('audio')
+    def.material.blending = 'additive'
+    def.maxCount = 4000
+    def.renderers = [{ name: 'sprite' }]
+    def.emitters = [
+        {
+            name:        'sphererandom',
+            rate:        260,
+            origin:      [0, 0, 0],
+            directions:  [1, 1, 0],
+            distancemin: 240,
+            distancemax: 300,
+            speedmin:    -20,
+            speedmax:    20,
+        },
+    ]
+    def.initializers = [
+        { name: 'lifetimerandom', min: 2.5, max: 4 },
+        { name: 'sizerandom', min: 4, max: 8 },
+        { name: 'colorrandom', min: [90, 150, 255], max: [255, 200, 150] },
+    ]
+    def.operators = [
+        { name: 'movement', gravity: [0, 0, 0], drag: 0.15 },
+        { name: 'audioreact', band: 0.06, sizemin: 0.6, sizemax: 2.8 },
+        { name: 'audioreact', band: 0.45, sizemin: 1, sizemax: 1, alphamin: 0.2, alphamax: 1 },
+        {
+            name:           'vortex',
+            controlpoint:   0,
+            axis:           [0, 0, 1],
+            distanceinner:  80,
+            distanceouter:  420,
+            speedinner:     150,
+            speedouter:     40,
+        },
+        { name: 'alphafade', fadeintime: 0.08, fadeouttime: 0.3 },
+    ]
+
+    return def
+}
+
 export const PRESETS: { id: string, label: string, load: () => ParticleSystemDef }[] = [
     { id: 'fountain', label: 'fountain（boxrandom + gravity + fade）', load: fountainPreset },
     { id: 'galaxy', label: 'galaxy（vortex + turbulence + additive）', load: galaxyPreset },
@@ -371,4 +415,5 @@ export const PRESETS: { id: string, label: string, load: () => ParticleSystemDef
     { id: 'comet', label: 'comet（spritetrail 速度拖影）', load: cometPreset },
     { id: 'rope-fall', label: 'rope fall（rope 绳链）', load: ropePreset },
     { id: 'ribbon', label: 'ribbon（ropetrail 历史轨迹带）', load: ribbonPreset },
+    { id: 'audio', label: 'audio（audioreact 频谱响应）', load: audioPreset },
 ]

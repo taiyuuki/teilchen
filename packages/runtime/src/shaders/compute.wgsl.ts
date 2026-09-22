@@ -26,6 +26,16 @@ struct SysUniform {
   controlPoints: array<vec4f, 8>,      // xyz: 世界坐标
   cpAngles: array<vec4f, 8>,           // xyz: 控制点欧拉角（弧度，ZYX 序）
 };
+// 音频响应（全局共享，CPU 每帧上传；未接音频时全 0）
+struct Audio {
+  level: f32,    // 总电平 0-1
+  bass: f32,     // 低频段均值
+  mid: f32,      // 中频段均值
+  treble: f32,   // 高频段均值
+  beat: f32,     // 节拍包络 0-1（CPU 侧 onset 检测 + 指数衰减）
+  _p0: f32, _p1: f32, _p2: f32,
+  bands: array<vec4f, 8>,  // 32 频带（对数分桶，attack/release 平滑后）
+};
 
 /** 控制点旋转矩阵（Euler ZYX = Rz·Ry·Rx，与参考实现一致）。 */
 fn cpRot(i: u32) -> mat3x3f {
@@ -122,6 +132,8 @@ struct EventBuffer {
 @group(0) @binding(9) var<storage, read_write> events: EventBuffer;
 // 子：爆发实例自由列表（CAS 弹出）
 @group(0) @binding(10) var<storage, read_write> instanceFree: array<u32>;
+// 音频频谱（全局共享 uniform）
+@group(0) @binding(11) var<uniform> audio: Audio;
 // ropetrail 历史环形缓冲（每粒子 64 槽 vec4：xyz + 时间桶号）
 @group(0) @binding(12) var<storage, read_write> trailHistory: array<vec4f>;
 // rope bitonic 排序参数（k, j, n；每 pass 由 CPU 写入）
@@ -446,6 +458,17 @@ fn hashOp(seq: u32, k: u32) -> vec3f {
   return vec3f(rnd(seq, 2000u + k), rnd(seq, 3000u + k), rnd(seq, 4000u + k));
 }
 
+/** 频带能量采样：t ∈ [0,1] 为频谱归一化位置（0 低频 → 1 高频），相邻带线性插值。 */
+fn audioBand(t: f32) -> f32 {
+  let x = clamp(t, 0.0, 1.0) * 31.0;
+  let i = u32(floor(x));
+  let a = audio.bands[i / 4u][i % 4u];
+  let j = min(i + 1u, 31u);
+  let b = audio.bands[j / 4u][j % 4u];
+
+  return mix(a, b, fract(x));
+}
+
 fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f, 8>) {
   let age = (*p).age;
   let seq = (*p).spawnSequence;
@@ -607,6 +630,11 @@ fn applyOperator(p: ptr<function, Particle>, op: OpGpu, k: u32, cp: array<vec4f,
         let inv = 1.0 / f32(cnt);
         (*p).velocity += (ali * inv * op.b.x + coh * inv * op.b.y + sep * op.b.z) * frame.dt;
       }
+    }
+    case 14u {  // audioreact：频带能量 v → size/alpha 乘性调制（mix(min, max, v)；默认 min=max=1 即不调制）
+      let v = audioBand(op.a.x);
+      (*p).size = max(0.0, (*p).size * mix(op.a.y, op.a.z, v));
+      (*p).alpha *= mix(op.b.x, op.b.y, v);
     }
     default {}
   }

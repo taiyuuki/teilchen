@@ -341,6 +341,19 @@ export function registerBuiltins(): void {
             { key: 'flags', label: 'Flags', type: 'int', default: 0 },
         ],
     })
+    registerModule({
+        kind:        'operator',
+        name:        'audioreact',
+        label:       'Audio React',
+        description: '音频频谱响应（runtime.setAudio 喂入 FFT；band 为频谱位置 0 低频-1 高频，能量驱动 size/alpha 脉动）',
+        params:      [
+            { key: 'band', label: 'Band（0-1 频谱位置）', type: 'float', default: 0.1, min: 0, max: 1 },
+            { key: 'sizemin', label: 'Size Min', type: 'float', default: 1 },
+            { key: 'sizemax', label: 'Size Max', type: 'float', default: 1.6 },
+            { key: 'alphamin', label: 'Alpha Min', type: 'float', default: 1 },
+            { key: 'alphamax', label: 'Alpha Max', type: 'float', default: 1 },
+        ],
+    })
 
     // ---------- renderers ----------
     registerModule({

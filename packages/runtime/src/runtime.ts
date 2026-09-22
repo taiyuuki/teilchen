@@ -8,6 +8,8 @@ import { type ChildDef, type ParticleSystemDef, type SpawnType, type Vec3, apply
 import { burstLifetime, compileChildren, compileProgram, compileRenderer } from './compile.ts'
 import type { SpriteFrame } from './tex.ts'
 import {
+    AUDIO_BANDS,
+    AUDIO_UNIFORM_SIZE,
     CHILDREN_OFFSET,
     COUNTS_OFFSET,
     ChildType,
@@ -208,6 +210,16 @@ export class ParticleRuntime {
     private fps = 0
     private statsClock = 0
 
+    // 音频响应（setAudio 喂频谱 → renderFrame 每帧处理上传 audioUniform）
+    private readonly audioUniform: GPUBuffer
+    private audioSpectrum:         Float32Array | Uint8Array | null = null
+    private audioSampleRate = 48000
+    private readonly audioSmooth = new Float32Array(AUDIO_BANDS)
+    private audioBeat = 0
+    private audioBassAvg = 0
+    private audioLastBeat = -1
+    private audioWired = false // 音频接入中；断开后仍需清一帧 uniform
+
     private constructor(opts: RuntimeOptions, device: GPUDevice, ctx: GPUCanvasContext, format: GPUTextureFormat) {
         this.device = device
         this.canvas = opts.canvas
@@ -218,6 +230,7 @@ export class ParticleRuntime {
         this.onStats = opts.onStats ?? null
 
         this.frameUniform = device.createBuffer({ size: FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+        this.audioUniform = device.createBuffer({ size: AUDIO_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
 
         this.computeModule = device.createShaderModule({ code: COMPUTE_WGSL, label: 'compute' })
 
@@ -235,6 +248,7 @@ export class ParticleRuntime {
                 { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
                 { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
                 { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
                 { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
                 { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
             ],
@@ -719,6 +733,7 @@ export class ParticleRuntime {
                 { binding: 8, resource: { buffer: instancesBuf ?? this.dummyStorages[1] } },
                 { binding: 9, resource: { buffer: eventsBuf ?? this.dummyStorages[2] } },
                 { binding: 10, resource: { buffer: freeBuf } },
+                { binding: 11, resource: { buffer: this.audioUniform } },
                 { binding: 12, resource: { buffer: res.trailHistory ?? this.dummyStorages[4] } },
                 { binding: 13, resource: { buffer: this.sortParams } },
             ],
@@ -864,6 +879,89 @@ export class ParticleRuntime {
         this.speedMul = Math.max(0, multiplier)
     }
 
+    /**
+     * 音频频谱输入（audioreact 算子的数据源）：
+     * Uint8Array（0-255，如 AnalyserNode.getByteFrequencyData 的输出）或
+     * Float32Array（0-1 线性幅度）；bin 0 = 最低频。每帧调用一次；
+     * null 断开（uniform 清零，画面回落静止）。sampleRate 为频谱采样率（默认 48000）。
+     */
+    setAudio(spectrum: Float32Array | Uint8Array | null, opts?: { sampleRate?: number }): void {
+        this.audioSpectrum = spectrum
+        if (opts?.sampleRate && opts.sampleRate > 0) this.audioSampleRate = opts.sampleRate
+        if (spectrum) this.audioWired = true
+    }
+
+    /**
+     * 频谱 → audioUniform：对数分桶（40Hz-16kHz → 32 带，带内取 max）→
+     * attack/release 平滑 → level/bass/mid/treble + 节拍包络（低频能量超过滑动均值×1.35 触发，
+     * 指数衰减）。dt=0 时只透传不平滑。
+     */
+    private processAudio(dt: number): void {
+        const out = new Float32Array(AUDIO_UNIFORM_SIZE / 4)
+        const src = this.audioSpectrum
+        if (!src || src.length === 0) {
+            if (!this.audioWired) return
+            this.audioWired = false
+            this.audioSmooth.fill(0)
+            this.audioBeat = 0
+            this.audioBassAvg = 0
+            this.device.queue.writeBuffer(this.audioUniform, 0, out)
+
+            return
+        }
+
+        const bins = src.length
+        const nyquist = this.audioSampleRate / 2
+        const fmin = 40
+        const fmax = Math.min(16000, nyquist)
+        const norm = src instanceof Uint8Array ? 1 / 255 : 1
+        const raw = new Float32Array(AUDIO_BANDS)
+        for (let i = 0; i < AUDIO_BANDS; i++) {
+            const f0 = fmin * (fmax / fmin) ** (i / AUDIO_BANDS)
+            const f1 = fmin * (fmax / fmin) ** ((i + 1) / AUDIO_BANDS)
+            const b0 = Math.max(0, Math.min(bins - 1, Math.floor(f0 / nyquist * bins)))
+            const b1 = Math.max(b0 + 1, Math.min(bins, Math.ceil(f1 / nyquist * bins)))
+            let m = 0
+            for (let b = b0; b < b1; b++) m = Math.max(m, Number(src[b]) * norm)
+            raw[i] = m
+        }
+
+        const kUp = dt > 0 ? 1 - Math.exp(-dt * 14) : 1
+        const kDown = dt > 0 ? 1 - Math.exp(-dt * 4) : 1
+        let sum = 0
+        for (let i = 0; i < AUDIO_BANDS; i++) {
+            const s = this.audioSmooth[i]
+            this.audioSmooth[i] = s + (raw[i] - s) * (raw[i] > s ? kUp : kDown)
+            sum += this.audioSmooth[i]
+        }
+        const seg = (a: number, b: number) => {
+            let t = 0
+            for (let i = a; i < b; i++) t += this.audioSmooth[i]
+
+            return t / (b - a)
+        }
+        const bass = seg(0, 8)
+        const mid = seg(8, 20)
+        const treble = seg(20, 32)
+
+        // 节拍：低频能量突破滑动基线触发，随时间指数衰减（挂钟计时，不受暂停/倍速影响）
+        this.audioBassAvg += (bass - this.audioBassAvg) * (dt > 0 ? 1 - Math.exp(-dt * 1.5) : 1)
+        const wall = performance.now() / 1000
+        if (bass > 0.12 && bass > this.audioBassAvg * 1.35 && wall - this.audioLastBeat > 0.18) {
+            this.audioBeat = 1
+            this.audioLastBeat = wall
+        }
+        this.audioBeat *= dt > 0 ? Math.exp(-dt * 7) : 1
+
+        out[0] = sum / AUDIO_BANDS
+        out[1] = bass
+        out[2] = mid
+        out[3] = treble
+        out[4] = this.audioBeat
+        for (let i = 0; i < AUDIO_BANDS; i++) out[8 + i] = this.audioSmooth[i]
+        this.device.queue.writeBuffer(this.audioUniform, 0, out)
+    }
+
     /** 背景色（渲染 pass 的 clear 值）。 */
     setClearColor(color: { r: number; g: number; b: number; a: number }): void {
         this.clearColor = color
@@ -957,6 +1055,7 @@ export class ParticleRuntime {
             return
         }
         this.writeFrameUniform(this.time, simulate ? dt : 0)
+        this.processAudio(dt)
         const encoder = this.device.createCommandEncoder()
         const ropeSystems: SystemRes[] = []
         for (const s of this.systems) {

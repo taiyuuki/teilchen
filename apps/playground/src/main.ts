@@ -337,6 +337,8 @@ async function main(): Promise<void> {
         runtime.setPointer(e.clientX - rect.left, e.clientY - rect.top)
     })
 
+    setupAudio(runtime)
+
     setInterval(() => {
         const s = runtime.stats
         const parts = Object.values(s.systems).reduce(
@@ -354,6 +356,191 @@ main().catch(err => {
     warn(`启动失败: ${err?.message ?? err}`)
     console.error(err)
 })
+
+// ---------------------------------------------------------------- 音频响应（audioreact 演示）
+
+/**
+ * 音频源（测试信号/麦克风/音频文件）→ AnalyserNode → 每帧 runtime.setAudio。
+ * 与 runtime 内部渲染循环解耦：这里只存最新频谱，runtime 在下一帧模拟时取用。
+ */
+function setupAudio(runtime: ParticleRuntime): void {
+    const srcSel = document.getElementById('audiosrc') as HTMLSelectElement
+    const fileBtn = document.getElementById('filebtn') as HTMLLabelElement
+    const fileInput = document.getElementById('audiofile') as HTMLInputElement
+    const trackEl = document.getElementById('audiotrack') as HTMLSpanElement
+
+    let ctx: AudioContext | null = null
+    let master: GainNode | null = null
+    let analyser: AnalyserNode | null = null
+    let stopTest: (() => void) | null = null
+    let audioEl: HTMLAudioElement | null = null
+    let mic: MediaStream | null = null
+    const freq = new Uint8Array(1024) // = frequencyBinCount（fftSize 2048）
+
+    function teardown(): void {
+        stopTest?.()
+        stopTest = null
+        if (audioEl) {
+            audioEl.pause()
+            audioEl.src = ''
+            audioEl = null
+        }
+        mic?.getTracks().forEach(t => t.stop())
+        mic = null
+        analyser = null
+        master = null
+        void ctx?.close().catch(() => undefined)
+        ctx = null
+        fileBtn.classList.remove('active')
+        trackEl.textContent = ''
+        runtime.setAudio(null)
+    }
+
+    /** master → analyser（供 setAudio 采样）+ master → destination（供试听）；analyser 不出声。 */
+    function graph(): { ctx: AudioContext, master: GainNode, analyser: AnalyserNode } {
+        if (ctx && master && analyser) return { ctx, master, analyser }
+        const c = new AudioContext()
+        const m = c.createGain()
+        m.gain.value = 0.8
+        const an = c.createAnalyser()
+        an.fftSize = 2048
+        an.smoothingTimeConstant = 0.55
+        m.connect(an)
+        m.connect(c.destination)
+        ctx = c
+        master = m
+        analyser = an
+
+        return { ctx: c, master: m, analyser: an }
+    }
+
+    /** 120 BPM 测试循环：kick（低频扫频）+ hat（高通噪声）+ 贝斯琶音 + lead —— 三段频谱都有起伏。 */
+    function startTest(): void {
+        const { ctx: ac, master: out } = graph()
+        void ac.resume()
+        const bpm = 120
+        const eighth = 60 / bpm / 2
+        let step = 0
+        let nextT = ac.currentTime + 0.1
+
+        const kick = (t: number) => {
+            const o = ac.createOscillator()
+            const g = ac.createGain()
+            o.type = 'sine'
+            o.frequency.setValueAtTime(160, t)
+            o.frequency.exponentialRampToValueAtTime(44, t + 0.16)
+            g.gain.setValueAtTime(1, t)
+            g.gain.exponentialRampToValueAtTime(0.001, t + 0.24)
+            o.connect(g).connect(out)
+            o.start(t)
+            o.stop(t + 0.26)
+        }
+        const hat = (t: number) => {
+            const n = Math.floor(ac.sampleRate * 0.04)
+            const buf = ac.createBuffer(1, n, ac.sampleRate)
+            const d = buf.getChannelData(0)
+            for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n)
+            const s = ac.createBufferSource()
+            s.buffer = buf
+            const hp = ac.createBiquadFilter()
+            hp.type = 'highpass'
+            hp.frequency.value = 7000
+            const g = ac.createGain()
+            g.gain.value = 0.35
+            s.connect(hp).connect(g)
+                .connect(out)
+            s.start(t)
+        }
+        const bass = (t: number, f: number) => {
+            const o = ac.createOscillator()
+            const g = ac.createGain()
+            const lp = ac.createBiquadFilter()
+            lp.type = 'lowpass'
+            lp.frequency.value = 900
+            o.type = 'sawtooth'
+            o.frequency.value = f
+            g.gain.setValueAtTime(0.0001, t)
+            g.gain.exponentialRampToValueAtTime(0.5, t + 0.02)
+            g.gain.exponentialRampToValueAtTime(0.001, t + eighth * 0.9)
+            o.connect(lp).connect(g)
+                .connect(out)
+            o.start(t)
+            o.stop(t + eighth)
+        }
+        const lead = (t: number) => {
+            const o = ac.createOscillator()
+            const g = ac.createGain()
+            o.type = 'triangle'
+            o.frequency.value = [440, 523.25, 659.25, 880][Math.floor(Math.random() * 4)] * (Math.random() < 0.3 ? 2 : 1)
+            g.gain.setValueAtTime(0.0001, t)
+            g.gain.exponentialRampToValueAtTime(0.12, t + 0.01)
+            g.gain.exponentialRampToValueAtTime(0.001, t + 0.18)
+            o.connect(g).connect(out)
+            o.start(t)
+            o.stop(t + 0.2)
+        }
+
+        // lookahead 调度：interval 只负责排程，声音按 audioContext 时钟精确触发
+        const timer = setInterval(() => {
+            while (nextT < ac.currentTime + 0.15) {
+                const s = step % 8
+                if (s === 0 || s === 4) kick(nextT)
+                if (s % 2 === 1) hat(nextT)
+                bass(nextT, [55, 55, 65.41, 82.41][Math.floor(step / 2) % 4])
+                if (s === 2 || s === 6) lead(nextT)
+                step++
+                nextT += eighth
+            }
+        }, 40)
+        stopTest = () => {
+            clearInterval(timer)
+            step = 0
+        }
+    }
+
+    async function startMic(): Promise<void> {
+        try {
+            const { ctx: ac, analyser: an } = graph()
+            await ac.resume()
+            mic = await navigator.mediaDevices.getUserMedia({ audio: true })
+            ac.createMediaStreamSource(mic).connect(an) // 只进分析，不接扬声器（防啸叫）
+        }
+        catch(err) {
+            warn(`麦克风不可用: ${err instanceof Error ? err.message : err}`)
+            srcSel.value = 'off'
+            teardown()
+        }
+    }
+
+    srcSel.addEventListener('change', () => {
+        teardown()
+        if (srcSel.value === 'test') startTest()
+        else if (srcSel.value === 'mic') void startMic()
+    })
+    fileInput.addEventListener('change', () => {
+        const file = fileInput.files?.[0]
+        if (!file) return
+        teardown()
+        const { ctx: ac, master: out } = graph()
+        void ac.resume()
+        audioEl = new Audio()
+        audioEl.src = URL.createObjectURL(file)
+        audioEl.loop = true
+        ac.createMediaElementSource(audioEl).connect(out)
+        void audioEl.play().catch(err => warn(`音频播放失败: ${err?.message ?? err}`))
+        fileBtn.classList.add('active')
+        trackEl.textContent = file.name
+        fileInput.value = ''
+    })
+
+    function pump(): void {
+        requestAnimationFrame(pump)
+        if (!ctx || !analyser) return
+        analyser.getByteFrequencyData(freq)
+        runtime.setAudio(freq, { sampleRate: ctx.sampleRate })
+    }
+    requestAnimationFrame(pump)
+}
 
 // ---------------------------------------------------------------- colorBlendMode 演示
 

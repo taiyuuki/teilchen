@@ -310,6 +310,7 @@ const LABEL_ZH: Record<string, string> = {
     'operator:maintaindistancetocontrolpoint':     '保持控制点距离',
     'operator:boids':                              '群集（Boids）',
     'operator:controlpointattract':                '控制点吸引',
+    'operator:audioreact':                         '音频响应',
 
     // renderers
     'renderer:sprite':                             '精灵',
@@ -378,6 +379,11 @@ const PARAM_ZH: Record<string, string> = {
     separationfactor:   '分离',
     alignmentfactor:    '对齐',
     cohesionfactor:     '聚合',
+    band:               '频带（0 低频-1 高频）',
+    sizemin:            '最小尺寸倍率',
+    sizemax:            '最大尺寸倍率',
+    alphamin:           '最小透明度倍率',
+    alphamax:           '最大透明度倍率',
     threshold:          '阈值',
     orientation:        '朝向',
     length:             '长度',

@@ -418,6 +418,14 @@ export class VFXPlayer {
         this.rt.setPointer(canvasX, canvasY)
     }
 
+    /**
+     * 音频频谱输入（audioreact 算子的数据源）：Uint8Array（0-255，
+     * 如 AnalyserNode.getByteFrequencyData 输出）或 Float32Array（0-1）；null 断开。
+     */
+    setAudio(spectrum: Float32Array | Uint8Array | null, opts?: { sampleRate?: number }): void {
+        this.rt.setAudio(spectrum, opts)
+    }
+
     setSpeed(multiplier: number): void {
         this.rt.setSpeed(multiplier)
     }
